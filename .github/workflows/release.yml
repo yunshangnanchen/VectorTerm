@@ -1,0 +1,222 @@
+# =====================================================================
+# 打 tag 即发布:windows-latest 上编译 → Inno Setup 打包 → 传 GitHub Release
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# 版本号以 tag 为准(tag 去掉前导 v),并回写 Cargo.toml —— 不回写的话
+# exe 的版本资源、安装包的 AppVersion、Apps & features 里显示的三处会打架。
+#
+# 手动触发(Actions → Run workflow)只编译上 artifact、不建 Release,
+# 正式打 tag 之前先跑一次能省一个"发出去了才发现打不了包"。
+#
+# 换行:build.cmd / setup.ps1 在仓库里是 LF,.iss 是带 BOM 的 LF,
+# 这里全程用 pwsh / cmd 调它们,不额外做 CRLF 转换(实测 LF 批处理
+# 的 goto 在同一台 Win11 上正常)。
+# =====================================================================
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 默认只读;写权限只给真正要建 Release 的那个 job
+permissions:
+  contents: read
+
+# 同一个 tag 重复推或手滑点两次,不并发跑
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 120
+    # 建 Release 要写权限;仓库默认是只读,这里按需放开
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          # gh release --generate-notes 要完整历史与 tag
+          fetch-depth: 0
+          # 发布走 GH_TOKEN,不需要把 token 留在 .git/config 里
+          persist-credentials: false
+
+      # ---------------------------------------------------------------
+      # 版本号:tag 说了算,并同步写回 Cargo.toml
+      #
+      # 只接受 x.y.z 三段数字:Inno 的 VersionInfoVersion 只吃数字,
+      # v1.0.0-beta 会让 ISCC 直接编译失败。真要做预发布,得先把
+      # installer\VectorTerm.iss 里的 VersionInfoVersion 拆成独立的
+      # 数字版本 define,再放开这里的校验。
+      # ---------------------------------------------------------------
+      - name: 解析版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $row = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $row) { throw 'Cargo.toml 里找不到 version = "..."(工作区版本)' }
+          $cargoVer = $row.Matches[0].Groups[1].Value
+
+          $isTag = ($env:GITHUB_REF_TYPE -eq 'tag')
+          if ($isTag) { $v = $env:GITHUB_REF_NAME -replace '^[vV]', '' } else { $v = $cargoVer }
+
+          if ($v -notmatch '^\d+\.\d+\.\d+$') {
+            throw "版本号 '$v' 不合法:只接受 数字.数字.数字。Inno 的 VersionInfoVersion 只吃数字,预发布标签需要先改 installer\VectorTerm.iss"
+          }
+
+          if ($v -ne $cargoVer) {
+            Write-Host "Cargo.toml 版本 $cargoVer -> $v"
+            $raw = Get-Content Cargo.toml -Raw
+            $re = [regex]'(?m)^version\s*=\s*"[^"]+"'
+            $raw = $re.Replace($raw, "version = `"$v`"", 1)
+            Set-Content -Path Cargo.toml -Value $raw -NoNewline -Encoding utf8NoBOM
+          } else {
+            Write-Host "版本已是 $v"
+          }
+
+          # wezterm 上游 tag 从 setup.ps1 里读,免得 workflow 和脚本两边漂移
+          $tagRow = Select-String -Path setup.ps1 -Pattern "\`$tag = '([^']+)'" | Select-Object -First 1
+          if (-not $tagRow) { throw 'setup.ps1 里找不到 $tag = ...' }
+          $wezTag = $tagRow.Matches[0].Groups[1].Value
+
+          "version=$v"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "publish=$($isTag.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "wezterm_tag=$wezTag"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "版本 $v / 发布 $isTag / wezterm $wezTag"
+
+      - name: 安装 Rust(MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: 打印工具链
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          (Get-Command git).Source
+
+      # 只缓存体积小、命中率高的东西。target/ 不缓存:release + lto 的
+      # 产物几个 GB,撑爆 10GB 额度还不如冷编译一次干净。
+      - name: 缓存 cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # .wezterm-src 被 .gitignore 排除,每次都得浅克隆;缓存下来能省
+      # 一次 wezterm 仓库的往返。key 带上游 tag 与 patch 内容:换了版本
+      # 或改了补丁就重新拉,不会用到过期的源码树。
+      - name: 缓存 wezterm 上游源码
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.wezterm-src
+          key: wezterm-${{ steps.ver.outputs.wezterm_tag }}-${{ hashFiles('patches/*.patch') }}
+
+      - name: 拉取 wezterm 上游源码
+        shell: pwsh
+        run: |
+          ./setup.ps1
+          if ($LASTEXITCODE -ne 0) { throw "setup.ps1 失败(exit $LASTEXITCODE)" }
+          if (-not (Test-Path '.wezterm-src\term\src\lib.rs')) { throw '.wezterm-src 不完整' }
+
+      # 仓库里的 ChineseSimplified.isl 是 6.5 格式,6.3/6.4 编不过 ——
+      # 先把版本卡住,别等到 ISCC 一屏看不懂的报错。
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco 安装 innosetup 失败(exit $LASTEXITCODE)" }
+
+          $iscc = @(
+            "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw '装完却找不到 ISCC.exe' }
+
+          $ver = (Get-Item $iscc).VersionInfo.ProductVersion
+          $m = [regex]::Match($ver, '^\d+(\.\d+){1,3}')
+          if (-not $m.Success) { throw "读不出 ISCC 版本: $ver" }
+          if ([version]$m.Value -lt [version]'6.5') {
+            throw "需要 Inno Setup 6.5+(仓库里的中文 .isl 是 6.5 格式),当前 $ver"
+          }
+          Write-Host "ISCC: $iscc ($ver)"
+          "VECTORTERM_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # build.cmd 是构建的唯一入口:自己找 vcvars64、构建 settings-gui、
+      # 把默认配置和字体的 license 拷到 exe 旁、再调 ISCC。
+      # 它用的 VECTORTERM_ISCC 就是上一步写进 GITHUB_ENV 的那个。
+      - name: 编译并打包
+        shell: cmd
+        run: build.cmd installer
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          $setup = "target\installer\VectorTerm-$ver-setup.exe"
+          if (-not (Test-Path $setup)) { throw "没找到 $setup" }
+
+          $exe = Get-Item $setup
+          Write-Host ("setup.exe: {0:N1} MB" -f ($exe.Length / 1MB))
+          # 字体是内嵌的(约 14 MB),安装包再怎么压也不该小于 3 MB;
+          # 明显偏小说明 iss 的 Source 没找着东西,ISCC 只打了个空壳。
+          if ($exe.Length -lt 3MB) { throw "安装包只有 $($exe.Length) 字节,不像话" }
+
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "SHA256: $hash"
+          "$hash  $($exe.Name)" | Out-File -FilePath "target\installer\SHA256SUMS.txt" -Encoding ascii
+
+      - name: 保存产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: VectorTerm-${{ steps.ver.outputs.version }}-setup
+          path: |
+            target/installer/VectorTerm-*-setup.exe
+            target/installer/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      # 用 runner 自带的 gh,不引第三方 release action:
+      # 参数就是 gh 的文档,出问题一眼能查。
+      # tag 已经存在(是它触发的),--verify-tag 兜住手滑。
+      - name: 发布到 GitHub Release
+        if: steps.ver.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $ver = "${{ steps.ver.outputs.version }}"
+          $files = @(
+            "target\installer\VectorTerm-$ver-setup.exe",
+            "target\installer\SHA256SUMS.txt"
+          )
+
+          # 重跑同一个 tag 时 release 已经存在,用 upload --clobber 盖掉,
+          # 而不是直接失败(第一次打包挂了、修完重跑是常态)。
+          gh release view $tag --json isDraft *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在,覆盖资产"
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "VectorTerm $ver" --generate-notes --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw "发布失败(gh exit $LASTEXITCODE)" }
+
+          gh release view $tag --json url --jq .url

@@ -1,0 +1,6 @@
+# 运行期生成的文件,不入库(由 run.ps1 / run.sh 生成)
+bench-screen.txt
+bench-payload.txt
+session-bench.log
+run-*.txt
+latest-summary.txt

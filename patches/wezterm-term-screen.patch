@@ -1,0 +1,19 @@
+diff --git a/term/src/screen.rs b/term/src/screen.rs
+index 4ca3ff8..086f7db 100644
+--- a/term/src/screen.rs
++++ b/term/src/screen.rs
+@@ -929,7 +929,13 @@ impl Screen {
+         for line in &first[first_range] {
+             lines.push(line);
+         }
+-        for line in &second[second_range] {
++        // VectorTerm patch: `second` is its own slice with local 0-based indices.
++        // `second_range` is expressed in absolute physical row indices
++        // (offset by first.len()), so indexing `second` directly is out of
++        // bounds whenever the VecDeque has wrapped around. Convert to local.
++        let second_local = second_range.start.saturating_sub(first.len())
++            ..second_range.end.saturating_sub(first.len());
++        for line in &second[second_local] {
+             lines.push(line);
+         }
+         func(&lines)

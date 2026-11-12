@@ -1,0 +1,91 @@
+[workspace]
+members = ["settings-gui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
+
+[package]
+name = "vectorterm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Windows 终端模拟器:wezterm-term 核心 + Kitty 风格光标尾迹动画 + Lua 配置"
+license.workspace = true
+
+# 产物名用品牌名 VectorTerm.exe;crate/包名保持小写(符合 Rust 惯例,
+# 也让 `cargo build` / CI 里引用 target 路径时不用纠结大小写 —— Windows 文件
+# 系统本身也不区分,vectorterm.exe 是同一个文件)。
+[[bin]]
+name = "VectorTerm"
+path = "src/main.rs"
+
+[dependencies]
+# 终端核心(wezterm 上游,经 setup 脚本浅克隆到本地)
+wezterm-term = { path = ".wezterm-src/term" }
+# wezterm-term 的兄弟 crate,直接引用其类型(CursorShape/CursorVisibility 等)
+termwiz = { path = ".wezterm-src/termwiz" }
+
+portable-pty = "0.9"
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
+winit = "0.30"
+softbuffer = "0.4"
+ab_glyph = "0.2"
+# 彩色 emoji 字体的 cmap(字符 → glyph id);ab_glyph 已间接依赖同一版本
+ttf-parser = "0.25"
+# 图片解码(iTerm2 / Kitty / sixel 三条协议共用 wezterm-term 的 ImageData)
+image = "0.24"
+arboard = "3"
+anyhow = "1"
+parking_lot = "0.12"
+wgpu = { version = "24", default-features = false, features = ["dx12", "wgsl"] }
+pollster = "0.4"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+# 启动日志要读自身令牌的完整性级别与父进程(排查"低完整性导致 shell 写不了 %APPDATA%")
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    # 文件面板跟随 shell 的当前目录:ReadProcessMemory 读目标进程 PEB
+    "Win32_System_Diagnostics_Debug",
+    # 上面那步要 NtQueryInformationProcess,从 ntdll 动态取地址(不静态链接)
+    "Win32_System_LibraryLoader",
+    # mux 守护进程:命名管道(会话多路复用)。ConnectNamedPipe 需要 Win32_System_IO
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    # 拖动缩放时读全局左键状态(等价于 wezterm 的 live_resizing)
+    "Win32_UI_Input_KeyboardAndMouse",
+    # 子类化窗口过程:在 WM_SIZING 里提前配置交换链(消除拖动时的拉伸抖动)
+    "Win32_UI_WindowsAndMessaging",
+    # 输入法:中文输入法开着时字母键会变成 VK_PROCESSKEY,winit 拿不到真实
+    # 虚拟键码,Ctrl/Alt 快捷键全部失配。用 ImmGetVirtualKey 把真身捞回来。
+    "Win32_UI_Input_Ime",
+    # 自定义背景:Win11 的 Mica / Acrylic 毛玻璃背板
+    "Win32_Graphics_Dwm",
+    # 客户区原点换算成屏幕坐标(拖动最大化的窗口时要把光标位置摆回去)
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+    # 发行版是 GUI 子系统:启动时兜住 std handles,出错时 AllocConsole 开独立调试终端
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    # 状态栏的 wezterm.battery_info():GetSystemPowerStatus
+    "Win32_System_Power",
+] }
+
+[dev-dependencies]
+# 测试里要拼 iTerm2 / Kitty 协议报文
+base64 = "0.21"

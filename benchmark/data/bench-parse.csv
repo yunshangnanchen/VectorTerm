@@ -1,0 +1,5 @@
+payload,bytes,median_mbs,best_mbs,median_ms,runs
+ascii,8388608,40.29,46.40,208.22,3
+sgr,8388608,69.51,71.32,120.68,3
+csi(cursor-move),8388608,5.63,5.63,1491.15,3
+unicode(cjk),8388608,53.66,54.24,156.34,3

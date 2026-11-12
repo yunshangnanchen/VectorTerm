@@ -1,0 +1,35 @@
+# 10. 已知限制(v0.1)
+
+- **GPU 后端拖动缩放窗口时,内容会被 DXGI 拉伸一下再弹回**(拖右边/下边最明显,标签栏文字也一起)。根因是 `wgpu-hal` 把 `DXGI_SCALING_STRETCH` 写死、后缓冲尺寸必须等于客户区,空档期旧帧被缩放铺满新客户区;已做 `WM_SIZING` 提前重建 + 同步 present 把窗口期压到 ~1ms,但压不掉 vsync 网格。**默认已改用 `render = "cpu"` 规避**,根治方案见 [`resize-fix-plan.md`](resize-fix-plan.md)
+- CPU 后端在超大窗口 + 全屏滚动时仍会吃满一帧预算(1080p 满屏约 14.5ms、p95 可到 19ms);这种场景可以显式写 `render = "gpu"` 换性能,代价是拖动缩放时会看到上述拉伸。GPU 后端目前每次出帧重写整份实例缓冲,尚未做静态层缓存
+- GPU 后端冷启动首帧约 580 ms、峰值内存约 485 MB(本机 Intel 核显实测),明显高于 CPU 后端的 112 ms / 55 MB;大头疑似 DX12 驱动预留与 wgpu 上传堆,尚未定位收敛
+- 输入延迟未做硬件级测量(无高速摄像/光电探头);ConPTY 端到端吞吐在测试进程内未取得有效数据,详见 [实测报告第 7 节](../benchmark/terminal-performance-report.md)
+- 拖选到窗口上/下边缘可以自动滚屏并继续扩选(`selection.edge_scroll`),但**滚轮翻页 + 再拖**的旧习惯也仍可用;侧键(button 8/9)、像素级坐标(SGR-Pixels)未接
+- 选区在 scrollback 环形缓冲回绕(默认 3500 行)后可能与原始文字错位;复制发生在松手瞬间,所以已复制的内容不受影响
+- 滚轮回看是亚行动画(缓入缓出 + 限速),但没有触摸板惯性/精确手势(动量由系统滚轮事件决定);拖动滚动条时是**直接落位**、不走缓动,保证跟手
+- 历史搜索只扫**活动 pane** 的回看缓冲(备用屏没有历史);查询是字面量,不支持正则;匹配数超过 `search.max_matches` 会截断,高亮是叠在文字上的半透明色块而不是给字形重着色
+- 斜体/粗体优先使用字体的 Italic/Bold face;字体没有对应 face 时才合成(**粗体向右重描一遍、斜体剪切位图**)
+- 闪烁按 xterm 的 530ms 相位节流重绘,只在相位翻转时出帧
+- **半透明只用整窗 alpha**:`window_background_opacity` 是层叠窗口的统一 alpha,文字会跟着一起变淡;`win32_system_backdrop`(mica/acrylic)只解析不生效——材质的透出需要客户区对 DWM 逐像素透明,而 `CreateSwapChainForHwnd` 不接受预乘 alpha(`0x887A0001`,与 `Scaling`/`SwapEffect` 组合无关),CPU 的 GDI `BitBlt` 也没有 alpha 通道。详见 [`custom-background.md`](custom-background.md) 第 5、6 节
+- 没有 HarfBuzz 整形:不支持连字(ligature)、复杂脚本的上下文变形;Nerd Font 图标是单个码点,不受影响
+- `nerd_font = "auto"` 在**第一次遇到缺字**时才扫描字体目录(约 100~200ms,一次性),避免每次启动都扫;扫描后缓存到进程内
+- 非 Mono 的 Nerd Font(`Propo`/比例宽度变体)图标可能对不齐单元格,建议用 `... Nerd Font Mono`
+- 单元格行高来自字体自身 asc-desc(限制 1.0~1.6em);Meslo 等字体是 1.55em,想要更紧凑可显式设 `font.line_height`
+- 光标形状支持 block/underline/bar,闪烁类形状按非闪烁渲染(避免与尾迹动画打架)
+- 键盘走传统 xterm 编码 + DECCKM/LNM/modifyOtherKeys/CSI-u,未实现 kitty keyboard protocol;`DECKPAM` 应用键盘区(数字小键盘)上游 termwiz 仍是 TODO
+- 分屏已支持(wezterm 同款 `Ctrl+Shift+Alt+"` / `%`,另有不带 Alt 与 `V`/`H` 字母别名),窗格大小也能用**鼠标拖分割线**和 `Ctrl+Shift+Alt+方向键` 调整。但这些动作仍是内置硬编码组合:`keys` 表能**拦截覆盖**这些键位,不能把 `SplitPane` / `AdjustPaneSize` 映射到别的键;调整以「移动分割线」为语义(`→` 让左/上侧变宽),不是「让当前焦点 pane 朝该方向扩张」
+- 焦点切换的「输入光标飞行」是纯视觉反馈:新 pane 的真实输入光标立刻出现,旧位置由一条尾迹收拢过去,不存在第二个飞行光标。尾迹与窗格内 kitty 光标尾迹共用同一个四角追赶积分器、同一份 `cursor` 配置(衰减、尾迹颜色、淡入曲线、硬上限),但跨窗格会把距离自适应倍率锁成 1.0 并限制单帧步长 —— 几十格位移若照常加速,尾巴一两帧就收完,反而看不出是同一个动画。它不会改动 shell 自身的游标位置;非聚焦 pane 的 caret 只是不绘制,终端内部光标仍在;分屏交互(鼠标点击 / `Alt+数字`)也只切焦点、不向终端发送按键
+- 命令面板(`Ctrl+Shift+P` / 搜索框输入 `/`)的命令集是内置的,`files` / `settings` / `help` / `key` / `reload` / `search`,**不支持用户自定义命令或参数**;`help` / `key` 是静态文本视图,一屏放不下时可用 `↑↓` 逐行、`PgUp/PgDn` 翻页、`Home/End` 到首尾查看(一屏行数随窗口高度在 8~32 行之间),底部显示当前区间;`settings` 拉起的是另一个进程,和终端窗口不共享状态(配置写回后靠终端自己的热重载生效)。命令面板与历史搜索共用同一个浮层,同一时刻只开一个
+- 旧的 `files-gui` shell 命令及其 OSC 1338 标记已彻底移除;若旧脚本还在敲它,shell 只会报「不是内部或外部命令」。Lua `keys` 里的 `"files_gui"` 是键位动作名,仍在
+- 文件浏览器回车打开文件默认**另起一个 vectorterm 进程**(新窗口):两个窗口之间不共享分屏、标签与会话,关掉主窗口不会带走编辑器窗口,反之亦然;想让编辑器留在当前窗口里,把 `files_gui.open_mode` 改成 `"split"` 或 `"current"`
+- 文件面板与终端的目录同步:`cmd.exe` 靠读进程工作目录(PEB),PowerShell 靠启动时注入的 `prompt` 钩子上报 OSC 7。若自定义脚本在运行时**再次**覆盖 `prompt`(个别主题会在空闲回调里重设),上报就断了 —— 面板会退化成「打开那一刻取一次目录」;此时把 `files_gui.follow_cwd` 关掉即可,不要让它空转 `push_cwd` 写不进终端的场景也不会有副作用
+- DPI 变化只做了基础处理(窗口缩放时重算网格,不主动跟随系统 DPI 变更)
+- 拖动缩放默认实时调整行列数(与 wezterm 一致)。ConPTY + PSReadLine 在个别机器上会借 resize 重绘提示符,若仍觉得跳,可设 `live_resize_mode = "freeze"`(拖完一次同步、拖动中右下留白)或 `"debounce"`(按 `resize_debounce_ms` 合并)
+- 标签栏是自绘实现:圆角是像素级 SDF 光栅化(没有阴影/渐变),标签多到放不下时只会挤压,没有横向滚动箭头和标签下拉列表;暂不支持拖拽排序、标签重命名、右键菜单。无边框 + 圆角时标签栏内容四周默认各内缩 `10 × scale_factor` 像素避开圆角(`tab_bar.edge_padding` / `top_padding` 可改,写 0 可贴边但圆角会裁到第一个标签),默认不能像 wezterm 那样让标签完全贴边
+- 标签标题来自应用的 OSC 0/2;应用不改标题时就显示 shell 名,不会去读前台进程名
+- 只有 `TITLE` 有系统原生边框(阴影、Aero Snap、Win11 悬停最大化弹出布局选择)。其余组合走 winit 无装饰窗口,非客户区为 0:窗口按钮是自绘的(所以没有 Win11 布局弹窗)、缩放靠自绘热区模拟、没有系统阴影;**Win11 圆角已通过 DWM 圆角偏好恢复**(可 `window_rounded_corners = false` 关掉),`NONE` 按 wezterm 语义完全不能缩放
+- 没有系统标题栏时标签栏无法完全隐藏:它同时兼任标题栏,关掉标签栏只会退化成一条纯拖动条(可以一枚窗口按钮都不画)
+- 热重载只覆盖动画参数/颜色/键位脚本/选区配置/标签栏(含四周留白)/`live_resize_mode`/`resize_debounce_ms`/`use_resize_increments`;字体、窗口几何、`window_decorations` 与 `integrated_title_*` 全套、`window_titlebar` / `window_rounded_corners`、`render` 后端、`shell`/`shell_args`/`env`/`session_log` 需要重启生效
+- 内置主题(`theme = "deepseek"`)是**加载期合并**,不是运行时对象:主题表先解析,用户表深合并盖上去;配置管理器只读写 `config.lua` 里显式出现的键,不会列出主题里的值。热重载只监视 `config.lua` 的修改时间,直接改 `config\deepseek.lua` 不会自动生效,把 `config.lua` 存一次盘即可;主题里带的启动项(初始窗口尺寸、字体、`render`)仍需重启。主题名只允许字母 / 数字 / `-` / `_`,不能写路径或指向程序目录外的文件;主题文件本身随发布版本只读分发,升级会覆盖
+- `session_log` 记录的是原始字节流(含 ANSI 转义序列),不是纯文本回放
+- 首次构建请使用 `build.cmd`(或 `build.ps1`):VS 2026 + cc-rs 环境问题见 [build.md](build.md)。它会自动执行 `setup.ps1`,因此首次构建需要网络;离线环境先手动准备好 `.wezterm-src`

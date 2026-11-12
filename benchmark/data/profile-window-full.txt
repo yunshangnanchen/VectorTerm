@@ -1,0 +1,12 @@
+960x640 gpu run1 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.333ms p50=3.336ms p95=3.968ms min=1.427ms max=6.716ms fps=300.1 
+960x640 gpu run2 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.329ms p50=3.329ms p95=3.840ms min=1.478ms max=6.888ms fps=300.4 
+960x640 gpu run3 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.333ms p50=3.346ms p95=4.120ms min=1.617ms max=7.759ms fps=300.1 
+960x640 cpu run1 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=5.187ms p50=4.184ms p95=12.989ms min=0.628ms max=26.050ms fps=192.8 
+960x640 cpu run2 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=5.351ms p50=4.268ms p95=13.345ms min=0.555ms max=21.976ms fps=186.9 
+960x640 cpu run3 [VectorTerm][profile] window=1200x800 grid=98x34 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=5.301ms p50=4.340ms p95=11.167ms min=0.594ms max=24.432ms fps=188.6 
+1920x1080 gpu run1 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.387ms p50=3.319ms p95=4.191ms min=1.495ms max=7.367ms fps=295.2 
+1920x1080 gpu run2 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.354ms p50=3.332ms p95=4.012ms min=1.400ms max=7.002ms fps=298.1 
+1920x1080 gpu run3 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=gpu frames=299 mean=3.342ms p50=3.321ms p95=3.869ms min=1.393ms max=6.623ms fps=299.2 
+1920x1080 cpu run1 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=14.555ms p50=14.071ms p95=19.445ms min=9.341ms max=24.913ms fps=68.7 
+1920x1080 cpu run2 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=14.546ms p50=13.879ms p95=18.442ms min=10.325ms max=29.421ms fps=68.7 
+1920x1080 cpu run3 [VectorTerm][profile] window=2400x1350 grid=198x58 scale=1.25 [VectorTerm][profile] backend=cpu frames=299 mean=14.236ms p50=13.643ms p95=19.041ms min=11.834ms max=24.205ms fps=70.2 

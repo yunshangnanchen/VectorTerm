@@ -1,0 +1,9 @@
+# 换行符必须原样保留的文件。
+#
+# 仓库其余文本走 core.autocrlf,这里几个不行 —— 它们被外部工具按字节读取:
+#   LICENSE.zh-CN.txt  安装向导的许可页(CRLF,缺了会挤成一行;还带 UTF-8 BOM)
+#   installer/*.isl    Inno 的语言文件(官方发行版是 LF)
+#   VectorTerm.iss         安装脚本(UTF-8 with BOM)
+LICENSE.zh-CN.txt -text
+installer/VectorTerm.iss -text
+installer/*.isl -text

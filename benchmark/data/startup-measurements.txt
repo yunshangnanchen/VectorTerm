@@ -1,0 +1,20 @@
+# 冷启动首帧 / 窗口出现 / 峰值内存(3 次运行,1920x1080,满屏文本)
+# 采集脚本: benchmark/run.ps1
+--- gpu run1
+[VectorTerm] 渲染后端:GPU(Intel(R) Graphics (Dx12))
+[VectorTerm][profile] first_frame_ms=689.044
+--- gpu run2
+[VectorTerm] 渲染后端:GPU(Intel(R) Graphics (Dx12))
+[VectorTerm][profile] first_frame_ms=575.594
+--- gpu run3
+[VectorTerm] 渲染后端:GPU(Intel(R) Graphics (Dx12))
+[VectorTerm][profile] first_frame_ms=579.917
+--- cpu run1
+[VectorTerm] 渲染后端:CPU 软渲染
+[VectorTerm][profile] first_frame_ms=111.538
+--- cpu run2
+[VectorTerm] 渲染后端:CPU 软渲染
+[VectorTerm][profile] first_frame_ms=147.747
+--- cpu run3
+[VectorTerm] 渲染后端:CPU 软渲染
+[VectorTerm][profile] first_frame_ms=111.431

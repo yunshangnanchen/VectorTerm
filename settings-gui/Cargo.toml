@@ -1,0 +1,29 @@
+[package]
+name = "vectorterm-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "VectorTerm 配置管理器:可视化编辑 vectorterm 的 Lua 配置,与终端本体完全独立"
+license.workspace = true
+
+[[bin]]
+name = "vectorterm-settings"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+    "wayland",
+    "x11",
+] }
+egui_extras = { version = "0.31", features = ["syntect"] }
+# 文件对话框(打开 lua 文件)
+rfd = "0.15"
+# 深色主题里更舒服的图标
+egui-phosphor = "0.8"
+
+# Windows 下打开外部资源管理器定位到文件
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell"] }
