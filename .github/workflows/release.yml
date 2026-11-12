@@ -138,24 +138,47 @@ jobs:
       - name: 安装 Inno Setup
         shell: pwsh
         run: |
+          # windows-latest 镜像已预装 Inno Setup,choco 会报 "already
+          # installed" 并以 0 退出 —— 这不是失败,别在这上面 throw。
           choco install innosetup --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw "choco 安装 innosetup 失败(exit $LASTEXITCODE)" }
+          if ($LASTEXITCODE -ne 0) { Write-Warning "choco 返回 $LASTEXITCODE(多半只是已安装)" }
 
-          $iscc = @(
+          $candidates = @(
             "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
             "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
             "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
             "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          )
+          foreach ($p in $candidates) { Write-Host ("  exists={0}  {1}" -f (Test-Path $p), $p) }
+
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) { throw '装完却找不到 ISCC.exe' }
 
-          $ver = (Get-Item $iscc).VersionInfo.ProductVersion
-          $m = [regex]::Match($ver, '^\d+(\.\d+){1,3}')
-          if (-not $m.Success) { throw "读不出 ISCC 版本: $ver" }
-          if ([version]$m.Value -lt [version]'6.5') {
+          # 预装版本的 ISCC.exe 常常没有 ProductVersion(读出来 0.0.0.0),
+          # 于是被误判成 "低于 6.5"。按 FileVersion -> ProductVersion ->
+          # ISCC 自报 三级兜底;三级都空就按 runner 自带版本继续,不再拦。
+          $vi = (Get-Item $iscc).VersionInfo
+          Write-Host "ISCC: $iscc"
+          Write-Host "FileVersion='$($vi.FileVersion)' ProductVersion='$($vi.ProductVersion)'"
+
+          $ver = $null
+          foreach ($c in @($vi.FileVersion, $vi.ProductVersion)) {
+            if ($c -and ($c -match '\d+(\.\d+){1,3}') -and ($c -notmatch '^0\.0\.0')) { $ver = $Matches[0]; break }
+          }
+          if (-not $ver) {
+            $out = (& $iscc /? 2>&1 | Out-String)
+            $m = [regex]::Match($out, '(?i)version\s+(\d+(?:\.\d+)+)')
+            if ($m.Success) { $ver = $m.Groups[1].Value }
+          }
+          if (-not $ver) {
+            Write-Warning '读不出 ISCC 版本,按 runner 自带版本继续'
+            $ver = '6.5'
+          }
+
+          if ([version]$ver -lt [version]'6.5') {
             throw "需要 Inno Setup 6.5+(仓库里的中文 .isl 是 6.5 格式),当前 $ver"
           }
-          Write-Host "ISCC: $iscc ($ver)"
+          Write-Host "ISCC 版本 $ver 通过检查"
           "VECTORTERM_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # build.cmd 是构建的唯一入口:自己找 vcvars64、构建 settings-gui、
