@@ -20,6 +20,11 @@ on:
   push:
     tags:
       - 'v*'
+    # 临时:调 workflow 期间推 main 也跑,省得 workflow_dispatch 用到
+    # 索引里没更新的旧版本。跑通后删掉这两行即可(push 这个改动本身
+    # 不会触发,因为新文件里 on 已经没有 branches 了)。
+    branches:
+      - main
   workflow_dispatch:
 
 # 默认只读;写权限只给真正要建 Release 的那个 job
