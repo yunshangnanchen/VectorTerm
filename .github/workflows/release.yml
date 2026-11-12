@@ -147,6 +147,7 @@ jobs:
           # installed" 并以 0 退出 —— 这不是失败,别在这上面 throw。
           choco install innosetup --yes --no-progress
           if ($LASTEXITCODE -ne 0) { Write-Warning "choco 返回 $LASTEXITCODE(多半只是已安装)" }
+          $LASTEXITCODE = 0
 
           $candidates = @(
             "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
@@ -159,9 +160,9 @@ jobs:
           $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) { throw '装完却找不到 ISCC.exe' }
 
-          # 预装版本的 ISCC.exe 常常没有 ProductVersion(读出来 0.0.0.0),
-          # 于是被误判成 "低于 6.5"。按 FileVersion -> ProductVersion ->
-          # ISCC 自报 三级兜底;三级都空就按 runner 自带版本继续,不再拦。
+          # 预装的 ISCC.exe 没有版本资源:FileVersion 和 ProductVersion
+          # 都读出 0.0.0.0。所以往下问卸载注册表,再不行就按 runner
+          # 自带版本继续 —— 刚才就是被这个 0.0.0.0 误判成 6.4 的。
           $vi = (Get-Item $iscc).VersionInfo
           Write-Host "ISCC: $iscc"
           Write-Host "FileVersion='$($vi.FileVersion)' ProductVersion='$($vi.ProductVersion)'"
@@ -170,11 +171,25 @@ jobs:
           foreach ($c in @($vi.FileVersion, $vi.ProductVersion)) {
             if ($c -and ($c -match '\d+(\.\d+){1,3}') -and ($c -notmatch '^0\.0\.0')) { $ver = $Matches[0]; break }
           }
+
           if (-not $ver) {
-            $out = (& $iscc /? 2>&1 | Out-String)
-            $m = [regex]::Match($out, '(?i)version\s+(\d+(?:\.\d+)+)')
-            if ($m.Success) { $ver = $m.Groups[1].Value }
+            $roots = @(
+              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            )
+            foreach ($root in $roots) {
+              if (-not (Test-Path $root)) { continue }
+              $keys = Get-ChildItem $root -ErrorAction SilentlyContinue |
+                      Where-Object { $_.PSChildName -like 'Inno Setup*' }
+              foreach ($k in $keys) {
+                $dv = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).DisplayVersion
+                Write-Host "  注册表 $($k.PSChildName) -> '$dv'"
+                if ($dv -and $dv -match '\d+(\.\d+){1,3}') { $ver = $Matches[0]; break }
+              }
+              if ($ver) { break }
+            }
           }
+
           if (-not $ver) {
             Write-Warning '读不出 ISCC 版本,按 runner 自带版本继续'
             $ver = '6.5'
@@ -185,6 +200,10 @@ jobs:
           }
           Write-Host "ISCC 版本 $ver 通过检查"
           "VECTORTERM_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # GitHub 的 pwsh 包装器会拿 $LASTEXITCODE 当 step 退出码,
+          # 这里显式归零,免得前面的外部命令(比如 ISCC /?)污染结果。
+          exit 0
 
       # build.cmd 是构建的唯一入口:自己找 vcvars64、构建 settings-gui、
       # 把默认配置和字体的 license 拷到 exe 旁、再调 ISCC。
