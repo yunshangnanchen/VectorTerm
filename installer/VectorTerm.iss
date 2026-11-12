@@ -165,8 +165,8 @@ const
 { 通知已经在跑的 explorer / 终端:环境变量变了。
   SendMessageTimeoutW 的 lParam 是 LPARAM,这里直接传字符串 —— Pascal Script
   把 String 编成宽字符指针,与 W 版 ABI 对得上。 }
-function SendMessageTimeout(hWnd: HWND; Msg: UINT; wParam: WPARAM; lParam: String;
-  fuFlags: UINT; uTimeout: UINT; var lpdwResult: UINT_PTR): LRESULT;
+function SendMessageTimeout(hWnd: HWND; Msg: UINT; wParam: UINT; lParam: String;
+  fuFlags: UINT; uTimeout: UINT; var lpdwResult: Int64): Integer;
   external 'SendMessageTimeoutW@user32.dll stdcall';
 
 function PathRootKey(): Integer;
@@ -188,7 +188,7 @@ end;
 
 function BroadcastEnvironment(): Boolean;
 var
-  Res: UINT_PTR;
+  Res: Int64;
 begin
   { 0 表示有窗口超时没理;这不是错误,值已经写进注册表了 }
   Result := SendMessageTimeout(WT_HWND_BROADCAST, WT_WM_SETTINGCHANGE, 0, 'Environment',
