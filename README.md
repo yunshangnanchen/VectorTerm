@@ -12,7 +12,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   <img src="https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="rust">
   <img src="https://img.shields.io/badge/renderer-softbuffer%20%7C%20wgpu%2FDX12-4b8bbe" alt="renderer">
   <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange" alt="license">
-  <img src="https://img.shields.io/badge/version-v0.1.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-v0.1.1-blue" alt="version">
 </p>
 
 <p>
