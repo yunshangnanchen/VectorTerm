@@ -118,6 +118,7 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 - 标签栏右侧可挂**自定义状态栏**:内置 DeepSeek 主题已带上「时段问候语 + 时钟 + 日期 + 电量 + 签名」,颜色跟随主题;用 `wezterm.on('update-right-status')` + `wezterm.format()` + `wezterm.battery_info()` + `wezterm.nerdfonts` 写,见 [手册 §8.7](docs/config-manual.md#87-状态栏左边一条右边一条)
 - 状态栏文字还是由脚本(`update-right-status`)决定,但**外观可以在配置里单独调**:`status_bar` 一组键管字号(`font_scale`)、整条栏高度(`height`)、左右留白(`padding`)、片段间距(`item_spacing`)和空格宽度(`space_width`,脚本里小点两侧的空隙就是空格,调小即可收紧切片),配置管理器「状态栏」分组拖滑杆即可,见 [手册 §8.7](docs/config-manual.md#87-状态栏左边一条右边一条)
 - 文件浏览器:命令面板 `/files` 打开**铺满当前窗格**的列表(路径就是 shell 的 cwd),`Ctrl+Shift+E` 从左边分出**侧边栏**;面板**属于某个 pane** —— 在哪个终端打开就只铺那个 pane,点到另一个终端会连列表带 cwd 一起移交;**目录双向同步** —— 终端里 `cd` 面板跟着走,面板里进目录会给终端写一行 `cd`(开关 `files_gui.follow_cwd` / `push_cwd`,默认都开;PowerShell 靠自动注入的 prompt 钩子上报 OSC 7,cmd 靠读进程工作目录);方向键 / 鼠标选目录,回车默认**另开一个窗口**用 `nvim` / `vim`(可自定义)打开文件,也能改成右侧分屏或当前终端的 shell(见 `files_gui.open_mode`);编辑器找不到时面板底部给英文提示,见 [手册 §15.10](docs/config-manual.md#1510-文件浏览器)
+- 拖入路径:从资源管理器把**文件或文件夹**拖到窗口上,松手就在光标处输入它的**绝对路径**(含空格时自动加双引号,多个文件之间用空格隔开,分屏时写给落点那个窗格);`drag_drop.enabled` / `drag_drop.quote` 可调,见 [手册 §15.12](docs/config-manual.md#1512-拖入文件自动输入绝对路径)
 - 关窗确认:有程序在跑时先在内容区正中问一句 `[Y]es / [N]o`
 - 资源管理器右键集成:在**文件夹空白处**、**文件夹图标上**、**盘符上**右键都有「在此处打开 VectorTerm」,窗口直接落在那个目录(命令行 `--cwd` 传路径,`-d` 是等价别名);安装包里的附加任务默认勾选,想单独给某个 exe 注册/撤销用 `context-menu.ps1`。Windows 11 的老式菜单项会收在「显示更多选项」里,`Shift + 右键` 可直达,见 [构建文档](docs/build.md#右键菜单那一项)
 - 滚轮回看是亚行缓动动画,不是整数行瞬移;按键时输入优先回底,长按回车不会卡在半路

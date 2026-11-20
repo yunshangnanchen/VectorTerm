@@ -591,6 +591,52 @@ impl Default for FilesGuiConfig {
     }
 }
 
+/// 拖进窗口的文件 / 文件夹,插入终端的路径加不加双引号。
+///
+/// 加引号只会影响"看起来干不干净",不加才会真的坏 —— 含空格的路径裸写进
+/// shell 会被拆成两个参数。所以默认 [`PathQuote::Auto`]:只在必要时加。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathQuote {
+    /// 含空格等特殊字符才加(默认)
+    Auto,
+    /// 一律加
+    Always,
+    /// 一律不加(自己保证路径里没空格)
+    Never,
+}
+
+impl PathQuote {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "always" | "quote" | "quoted" => Some(Self::Always),
+            "never" | "plain" | "raw" => Some(Self::Never),
+            _ => None,
+        }
+    }
+}
+
+/// 把资源管理器里的文件 / 文件夹直接拖到终端窗口上,就把它**绝对路径**
+/// 写进光标所在的位置(相当于替你敲了一遍路径)。
+///
+/// 拖文件夹同理 —— 拖进来的是目录本身,不是里面的内容。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragDropConfig {
+    /// 总开关。关掉之后拖放由窗口吞掉,不写终端。
+    pub enabled: bool,
+    /// 路径要不要加双引号。见 [`PathQuote`]。
+    pub quote: PathQuote,
+}
+
+impl Default for DragDropConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quote: PathQuote::Auto,
+        }
+    }
+}
+
 /// 切换焦点时,飞行中的输入光标最终落在哪里。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaretLanding {
@@ -1301,6 +1347,8 @@ pub struct AppConfig {
     pub pane_focus: PaneFocusConfig,
     /// 文件浏览器:编辑器命令、侧边栏宽度、是否显示隐藏文件。见 [`FilesGuiConfig`]。
     pub files_gui: FilesGuiConfig,
+    /// 拖入文件 / 文件夹时插入绝对路径。见 [`DragDropConfig`]。
+    pub drag_drop: DragDropConfig,
     /// 关闭窗口时,如果某个标签里还有程序在跑(不只是 shell 本身),
     /// 先弹一个确认框。默认开,对应 wezterm 的"关闭前确认"行为。
     pub quit_confirmation: bool,
@@ -1363,6 +1411,7 @@ impl Default for AppConfig {
             split_divider: SplitDividerConfig::default(),
             pane_focus: PaneFocusConfig::default(),
             files_gui: FilesGuiConfig::default(),
+            drag_drop: DragDropConfig::default(),
             quit_confirmation: true,
             exit_behavior: ExitBehavior::Close,
             session_persistence: false,
@@ -1871,6 +1920,7 @@ fn parse_table(tbl: &mlua::Table) -> Result<AppConfig, String> {
     parse_split_divider(&tbl, &mut cfg.split_divider);
     parse_pane_focus(&tbl, &mut cfg.pane_focus);
     parse_files_gui(&tbl, &mut cfg.files_gui);
+    parse_drag_drop(&tbl, &mut cfg.drag_drop);
     parse_fonts(&tbl, &mut cfg.fonts);
     // ---- 会话结束行为 / 关窗确认 ----
     // exit_behavior = "Close"(默认) | "Hold",wezterm 同名项
@@ -2740,6 +2790,25 @@ fn parse_files_gui(tbl: &mlua::Table, f: &mut FilesGuiConfig) {
     }
 }
 
+/// `drag_drop = { ... }`:拖文件 / 文件夹进窗口时插入绝对路径。
+fn parse_drag_drop(tbl: &mlua::Table, d: &mut DragDropConfig) {
+    let Ok(Some(t)) = tbl.get::<Option<mlua::Table>>("drag_drop") else {
+        return;
+    };
+    if let Ok(Some(v)) = t.get::<Option<bool>>("enabled") {
+        d.enabled = v;
+    }
+    // 拼错就保留默认 Auto,不因为一个笔误改变"要不要加引号"这种会出错的语义
+    if let Ok(Some(v)) = t.get::<Option<String>>("quote") {
+        match PathQuote::parse(&v) {
+            Some(q) => d.quote = q,
+            None => crate::wlog!(
+                "配置:未知的 drag_drop.quote = {v:?}(可选 auto / always / never),按 auto 处理"
+            ),
+        }
+    }
+}
+
 /// `pane_focus = { ... }`:焦点交互与输入光标飞行动画。
 fn parse_pane_focus(tbl: &mlua::Table, f: &mut PaneFocusConfig) {
     let Ok(Some(t)) = tbl.get::<Option<mlua::Table>>("pane_focus") else {
@@ -3521,6 +3590,31 @@ mod tests {
         let f = parse_str("return { files_gui = { push_cwd = false } }").files_gui;
         assert!(f.follow_cwd);
         assert!(!f.push_cwd);
+    }
+
+    #[test]
+    fn drag_drop_defaults_and_overrides() {
+        let d = parse_str("return {}").drag_drop;
+        assert!(d.enabled, "拖入路径默认开着");
+        assert_eq!(d.quote, PathQuote::Auto);
+
+        let d = parse_str(r#"return { drag_drop = { enabled = false, quote = "always" } }"#).drag_drop;
+        assert!(!d.enabled);
+        assert_eq!(d.quote, PathQuote::Always);
+
+        // 只写一半时另一半保持默认
+        let d = parse_str(r#"return { drag_drop = { quote = "never" } }"#).drag_drop;
+        assert!(d.enabled);
+        assert_eq!(d.quote, PathQuote::Never);
+
+        // 拼错的取值不能改变语义(仍然 auto)
+        let d = parse_str(r#"return { drag_drop = { quote = "sometimes" } }"#).drag_drop;
+        assert_eq!(d.quote, PathQuote::Auto);
+
+        assert_eq!(PathQuote::parse(" AUTO "), Some(PathQuote::Auto));
+        assert_eq!(PathQuote::parse("quoted"), Some(PathQuote::Always));
+        assert_eq!(PathQuote::parse("raw"), Some(PathQuote::Never));
+        assert_eq!(PathQuote::parse("sometimes"), None);
     }
 
     #[test]

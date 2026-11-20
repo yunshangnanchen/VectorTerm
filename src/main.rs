@@ -22,6 +22,7 @@ mod commands;
 mod config;
 mod cursor;
 mod debug_term;
+mod dragdrop;
 mod emoji;
 mod files;
 mod font;
@@ -968,6 +969,14 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => state.mouse_moved(position.x, position.y),
+            // ---- 拖放 ----
+            // 资源管理器里把文件 / 文件夹拖进来 = 在光标处敲出它的绝对路径。
+            // 一次拖多个时 winit 会为每个条目各发一次 `DroppedFile`,而每条写出
+            // 来都自带一个尾随空格,所以多条之间天然分开、不会粘在一起。
+            WindowEvent::DroppedFile(path) => state.drop_paths(vec![path]),
+            // 悬停阶段不做视觉反馈:自绘终端的"落点高亮"要额外画一层,
+            // 而拖拽的落点本来就是鼠标位置,光标本身就是指示器。
+            WindowEvent::HoveredFile(_) | WindowEvent::HoveredFileCancelled => {}
             WindowEvent::MouseInput {
                 state: btn_state,
                 button,
@@ -1063,6 +1072,28 @@ impl ApplicationHandler<UserEvent> for App {
                     state.autotyped = true;
                     let bytes = s.replace("\\r", "\r").replace("\\n", "\n");
                     state.send_bytes(bytes.as_bytes());
+                }
+            }
+        }
+
+        // 自动化测试钩子:`VECTORTERM_AUTO_DROP=路径1|路径2` —— 启动 1.8s 后
+        // 假装"有人把这些文件拖进了窗口"。真实的拖放由 OLE 驱动,脚本没法凭空
+        // 造一次拖拽,所以这里直接调**同一个内部入口**(`drop_paths`):
+        // 引号规则、落点选窗格、写 PTY 全都走一遍,只是不经过系统拖放循环。
+        if !state.auto_dropped {
+            if let Ok(spec) = std::env::var("VECTORTERM_AUTO_DROP") {
+                if BOOT
+                    .get()
+                    .is_some_and(|b| b.elapsed() > Duration::from_millis(1800))
+                {
+                    state.auto_dropped = true;
+                    let paths: Vec<PathBuf> = spec
+                        .split('|')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                        .collect();
+                    state.drop_paths(paths);
                 }
             }
         }
@@ -1607,6 +1638,22 @@ fn client_origin(hwnd: isize) -> Option<(i32, i32)> {
     unsafe {
         let mut p = POINT { x: 0, y: 0 };
         (ClientToScreen(hwnd as _, &mut p) != 0).then_some((p.x, p.y))
+    }
+}
+
+/// 系统光标当前在客户区里的位置(物理像素)。拖放落点在哪个窗格要靠它:
+/// 拖拽时窗口收不到 `WM_MOUSEMOVE`,应用自己那份鼠标坐标是过期的。
+#[cfg(windows)]
+fn cursor_in_client(hwnd: isize) -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    unsafe {
+        let mut p = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut p) == 0 {
+            return None;
+        }
+        (ScreenToClient(hwnd as _, &mut p) != 0).then_some((p.x, p.y))
     }
 }
 
@@ -3728,6 +3775,8 @@ struct GuiState {
     quit_requested: bool,
     /// `VECTORTERM_AUTOTYPE` 这个自动化测试钩子是否已经用过(只敲一次)
     autotyped: bool,
+    /// `VECTORTERM_AUTO_DROP` 是否已经用过(只拖一次)
+    auto_dropped: bool,
     /// 活动标签
     tab: TabState,
     /// 所有标签槽位:长度 = 标签数,活动位是 None(其状态在 `tab` 里)。
@@ -4151,6 +4200,7 @@ impl GuiState {
             script_actions,
             quit_requested: false,
             autotyped: false,
+            auto_dropped: false,
             tab,
             background: vec![None],
             active: 0,
@@ -8323,6 +8373,62 @@ impl GuiState {
         let p = self.tab.active_pane_mut();
         let _ = p.kb_writer.write_all(data);
         let _ = p.kb_writer.flush();
+    }
+
+    /// 拖进来的文件 / 文件夹:把绝对路径敲进落点那个窗格。
+    ///
+    /// 拖放是"把东西放到某处",所以落点决定写给谁:落点所在的窗格先切过去,
+    /// 路径再落到它的提示符后面。落点算不出来(落在标签栏上、或者拿不到系统
+    /// 光标位置)才退回当前活动窗格。
+    ///
+    /// winit 对一次拖放里的每个条目各发一条 `DroppedFile`,所以这里通常只收到
+    /// 一条;每条写出来都自带一个尾随空格,连着拖多个文件也不会粘成一串。
+    fn drop_paths(&mut self, paths: Vec<PathBuf>) {
+        if !self.cfg.drag_drop.enabled || paths.is_empty() {
+            return;
+        }
+        // 关窗确认框是模态:此刻用户眼里没有 shell,路径写进去只会变成幽灵输入
+        if self.confirm.is_some() {
+            return;
+        }
+        // 搜索栏 / 命令面板正挡在终端前面:先收起来,焦点回终端再写
+        if self.search.active {
+            self.close_search();
+        }
+        if self.panel.active {
+            self.close_panel();
+        }
+        if let Some(idx) = self.drop_pane() {
+            self.focus_pane_index(idx);
+        }
+        let text = dragdrop::paths_text(&paths, self.cfg.drag_drop.quote);
+        self.clear_selection_on_input();
+        self.scroll_to_bottom();
+        // 和键入 / 粘贴共用同一条写入路径:shell 侧看到的就是"有人替我打了字",
+        // PSReadLine 会照常回显、补全、进历史
+        self.send_bytes(text.as_bytes());
+        self.window.request_redraw();
+    }
+
+    /// 拖放落点在哪个窗格。
+    ///
+    /// 拖拽期间系统把鼠标捕获交给了 OLE 拖放循环,`mouse_px` 停在上次移出窗口
+    /// 之前的位置,不能直接用;这里现问一次系统光标。两边都是**物理像素**
+    /// (`GetCursorPos` 天生如此,winit 的 `CursorMoved` 也是 `PhysicalPosition`,
+    /// 而 `Renderer` 的 `pad_x` / `cell_w` 全都按 `font.size × scale` 算),
+    /// 所以这里不做任何缩放换算 —— 多除一次 `scale_factor` 在 150% 缩放的屏上
+    /// 会把落点挪到隔壁窗格。
+    fn drop_pane(&self) -> Option<usize> {
+        #[cfg(windows)]
+        {
+            let hwnd = hwnd_of(&self.window)?;
+            let (x, y) = cursor_in_client(hwnd)?;
+            self.pane_at(x as f64, y as f64)
+        }
+        #[cfg(not(windows))]
+        {
+            self.pane_at(self.mouse_px.0, self.mouse_px.1)
+        }
     }
 
     fn paste(&mut self) {
