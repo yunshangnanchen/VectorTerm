@@ -1423,6 +1423,10 @@ impl GpuRenderer {
         // 背景层最先入队:它铺满整窗,后面所有内容都叠在它上面。
         // 放在这里(而不是 items 里)是为了让它不受内容区 scissor 裁剪。
         self.push_background(&mut b, frame);
+        // 背景层实例到此为止。绘制阶段要用它把"背景层"和"内容"分开:
+        // 背景层必须铺满整窗(和 CPU 端一样暂时放开 clip),否则标签栏下那条
+        // 内边距只剩下清屏色,会变成一条比内容更透的横带。
+        let bg_end = b.insts.len() as u32;
         let mut trail_item: Option<&Item> = None;
         // 尾迹在实例流里的位置:GPU 要在这里切一次管线
         let mut trail_at: u32 = 0;
@@ -1697,10 +1701,18 @@ impl GpuRenderer {
                     pass.draw(0..6, 0..1);
                     trail_drawn = true;
                 }
-                // 叠加层(标签栏):铺满窗口,不受内容区裁剪
-                if has_overlay && !full_scissor && seg.start >= overlay_at {
+                // 背景层与标签栏叠加层铺满整窗,不受内容区裁剪:
+                // 背景层被裁掉的话,标签栏下面那条内边距就没有壁纸/渐变,
+                // 只剩一层清屏色,看起来是"半截毛玻璃"(比内容更透的一条横带)。
+                let want_full = seg.start < bg_end || (has_overlay && seg.start >= overlay_at);
+                if want_full && !full_scissor {
                     pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
                     full_scissor = true;
+                    h_clipped = false;
+                } else if !want_full && full_scissor {
+                    // 背景层画完,回到内容区裁剪
+                    pass.set_scissor_rect(0, top, self.config.width, content_h);
+                    full_scissor = false;
                 }
                 // 横向裁剪带(侧边栏滑入/滑出):把 scissor 收窄到它自己的区域。
                 // 不管的话滑动中的面板会糊到右邻窗格的终端上。
