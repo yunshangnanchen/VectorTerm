@@ -1899,11 +1899,11 @@ window_background_gradient = {
 
 材质能透出来,前提是 `window_background_opacity < 1` 且走 GPU 后端(逐像素 alpha,见 13.6)。
 
-`"acrylic"` 没有直接用 DWM 的 `DWMSBT_TRANSIENTWINDOW`,因为那个材质**在窗口失焦时会被
-DWM 撤掉**——就是 wezterm 那个"点一下别处磨砂就没了"的毛病。实测窗口内有焦点时背景
-梯度能量 0.1(完全糊掉),失焦后变成 669.9(和窗外原始画面一样锐利)。改用作用在窗口
-自身合成上的 accent 模糊后磨砂一直在;系统不认这个接口时会退回 DWM Acrylic 并在日志里
-说明"失焦会失去磨砂"。
+`"acrylic"` 没有直接用 DWM 的 `DWMSBT_TRANSIENTWINDOW`,因为那个材质(以及 Mica)**在窗口
+失去激活状态时会被 DWM 退化成纯色**——就是 wezterm 那个"点一下别处磨砂就没了"的毛病。
+实测失焦后窗口内是一块纯灰(RGB 84),有焦点时才是模糊的。改用作用在窗口自身合成上的
+accent 模糊后,有焦点与失焦时窗口内的梯度能量都是 4.5(窗外原始棋盘是 661),磨砂一直在;
+系统不认这个接口时会退回 DWM Acrylic 并在日志里说明"失焦会失去磨砂"。
 
 ### 13.6 `window_background_opacity`:背景半透明
 

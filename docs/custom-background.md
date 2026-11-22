@@ -125,20 +125,26 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
 ### 6.1 为什么 acrylic 不直接用 DWM 的
 
 因为 wezterm 那个"一点别处磨砂就没了"的毛病，根源就在 DWM 材质本身：
-`DWMSBT_TRANSIENTWINDOW` 在窗口**失焦时会被 DWM 撤掉**。
+`DWMSBT_TRANSIENTWINDOW`（Acrylic）和 `DWMSBT_MAINWINDOW`（Mica）在窗口**失去激活状态**
+时会被 DWM 退化成一块纯色。
 
 实测（`tools/diagnostics/glass_metric.py`，背景放高频棋盘格，测窗口内一块空白区的
-"梯度能量"——棋盘清晰时约 660，糊掉时约 0）：
+"梯度能量"——棋盘清晰时约 660，完全糊掉时约 0）：
 
-| 状态 | 窗口内梯度能量 | 观感 |
+| 材质 | 有焦点 | 失焦 |
 |---|---|---|
-| 有焦点 | 0.1 | 完全磨砂 |
-| 失焦 | 669.9 | 磨砂消失，只剩清晰的透视 |
+| DWM Acrylic（`DWMSBT_TRANSIENTWINDOW`） | 0.1，磨砂 | 0.0，但画面是**纯灰 RGB 84**，磨砂变实心 |
+| DWM Mica（`DWMSBT_MAINWINDOW`） | 0.0，纯灰 32 | 0.0，纯灰 32 |
+| **accent 模糊（现在用的）** | **4.5** | **4.5** |
 
-accent 模糊是作用在窗口自身合成上的，与激活状态无关，所以换成它之后磨砂一直在。
+accent 模糊作用在窗口自身的合成上，与激活状态无关，所以磨砂一直在。
 万一系统不认这个接口，会退回 DWM Acrylic 并打日志说明"失焦会失去磨砂"。
 
-复现脚本：`tools/diagnostics/glass_metric.py <tag> <none|acrylic|mica> <opacity> [位置] [win|back]`。
+复现脚本：`tools/diagnostics/glass_metric.py <tag> <none|acrylic|mica> <opacity> [位置] [win|desk]`。
+
+> 测的时候**别去点背景窗口来取消焦点**：它通常也是 TOPMOST 且比前台窗口大，
+> 一激活就抬到最上层把前台窗口整个盖住，量到的会变成背景自己的棋盘格（会误判成
+> "磨砂掉了"）。取消焦点请点桌面空白处（`desk`）。
 
 ## 7. 代价
 

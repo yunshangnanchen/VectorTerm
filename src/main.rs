@@ -1567,10 +1567,14 @@ impl Drop for Backend {
 
 /// 经典 accent 模糊(`SetWindowCompositionAttribute`,未公开 API)。
 ///
-/// 为什么不用 Win11 的 DWM 材质:实测 `DWMSBT_TRANSIENTWINDOW`(Acrylic)在窗口
-/// **失焦时会被 DWM 直接撤掉**——有焦点时窗口内梯度能量 0.1(完全糊掉),失焦后
-/// 变成 669.9(跟窗外原始棋盘格一样锐利),也就是 wezterm 那个"一点别处磨砂就没了"
-/// 的毛病。accent 模糊是作用在窗口自身合成上的,不受激活状态影响,所以磨砂能一直保持。
+/// 为什么不用 Win11 的 DWM 材质:`DWMSBT_TRANSIENTWINDOW`(Acrylic)和
+/// `DWMSBT_MAINWINDOW`(Mica)在窗口**失去激活状态时会被 DWM 退化成纯色**——
+/// 实测失活后窗口内是一块纯灰(RGB 84 / 32,梯度能量 0),有焦点时才是糊的
+/// (梯度能量 0.1),观感就是 wezterm 那个"点一下别处磨砂就没了"。
+///
+/// accent 模糊作用在窗口自身的合成上,与激活状态无关:实测有焦点和失焦时
+/// 窗口内梯度能量都是 4.5(窗外原始棋盘是 661),磨砂一直在。
+/// 判定方法和数据见 `tools/diagnostics/glass_metric.py`。
 #[cfg(windows)]
 mod accent_blur {
     use std::ffi::c_void;

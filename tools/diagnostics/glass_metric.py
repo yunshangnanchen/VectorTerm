@@ -151,9 +151,10 @@ def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "wi
     # 焦点控制:SetForegroundWindow 常被系统拒绝,直接用真实点击。
     if focus == "win":
         click(X + W // 2, Y + H - 40)
-    elif focus == "back":
-        # 点背景窗口露出前窗之外的那一条
-        click(X - M // 2, Y + H // 2)
+    elif focus == "desk":
+        # 点桌面空白:绝对不要去点背景窗口 —— 它也是 TOPMOST 且比前台窗口大,
+        # 一激活就会抬到最上层把前台窗口整个盖住,量到的就成了它自己的棋盘格。
+        click(2400, 1300)
     time.sleep(1.8)
 
     shot = ImageGrab.grab(bbox=(X - M, Y - M, X + W + M, Y + H + M), all_screens=True)
