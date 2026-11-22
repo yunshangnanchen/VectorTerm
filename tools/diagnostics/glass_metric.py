@@ -79,7 +79,8 @@ def mean(im: Image.Image):
     return tuple(round(v, 1) for v in ImageStat.Stat(im.convert("RGB")).mean)
 
 
-def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "win"):
+def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "win",
+         extra: str = ""):
     global X, Y
     X, Y = POS[pos]
     tag = f"{tag}_p{pos}"
@@ -107,12 +108,19 @@ def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "wi
 
     bd = f'win32_system_backdrop = "{backdrop}",' if backdrop != "none" else ""
     front_cfg = OUT / f"{tag}.lua"
-    front_cfg.write_text(f'''return {{
+    if extra.startswith("@"):
+        # @路径 = 直接用这份配置文件测(不多加任何覆盖)
+        front_cfg = Path(extra[1:])
+        bd = ""
+        extra = ""
+    else:
+        front_cfg.write_text(f'''return {{
   render = "gpu",
   window_decorations = "NONE",
   padding = 8,
   {bd}
   window_background_opacity = {opacity},
+  {extra}
   colors = {{ background = "#0B1220", foreground = "#E6EDF7" }},
   shell = "pwsh.exe",
   shell_args = {{ "-NoLogo", "-NoProfile", "-NoExit", "-Command",
@@ -121,7 +129,6 @@ def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "wi
   tab_bar = {{ enable = false }},
 }}
 ''', encoding="utf-8")
-
     env = dict(os.environ)
     for k in list(env):
         if k.startswith("VECTORTERM_"):
@@ -164,11 +171,18 @@ def main(tag: str, backdrop: str, opacity: float, pos: int = 0, focus: str = "wi
     back.kill()
     log.close()
 
-    # 取景坐标换算:窗口左上角在截图里的位置 = (M, M)
+    # 取景坐标换算:窗口左上角在截图里的位置 = (M, M)。
+    # 注意截图可能被系统 DPI 缩放(125% / 150%),所以要按实际像素尺寸换比例,
+    # 否则采样区会滑到窗口外面去 —— 那样量到的全是背景,数值毫无意义。
+    sw, sh = shot.size
+    kx = sw / float(W + 2 * M)
+    ky = sh / float(H + 2 * M)
+    gx = lambda v: max(0, min(sw - 1, int(v * kx)))
+    gy = lambda v: max(0, min(sh - 1, int(v * ky)))
     # 外部参照:窗口左侧那条背景带
-    outside = shot.crop((4, M + 60, M - 6, H + M))
+    outside = shot.crop((gx(4), gy(M + 60), gx(M - 6), gy(H + M)))
     # 内部参照:避开文字与标签栏,取右下方空白区
-    inside = shot.crop((M + 700, M + 620, M + 1100, M + 700))
+    inside = shot.crop((gx(M + 700), gy(M + 620), gx(M + 1100), gy(M + 700)))
     print(f"== {tag} backdrop={backdrop} opacity={opacity} focus={focus}"
           f"{' (前台=前窗)' if fg == fh else ' (前台=别的窗口)'}")
     print(f"   outside grad_energy = {grad_energy(outside):8.1f}  mean = {mean(outside)}")
@@ -187,4 +201,5 @@ def click(px: int, py: int):
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2], float(sys.argv[3]),
          pos=int(sys.argv[4]) if len(sys.argv) > 4 else 0,
-         focus=sys.argv[5] if len(sys.argv) > 5 else "win")
+         focus=sys.argv[5] if len(sys.argv) > 5 else "win",
+         extra=sys.argv[6] if len(sys.argv) > 6 else "")

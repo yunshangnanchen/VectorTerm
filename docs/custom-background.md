@@ -108,8 +108,22 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
   这是实现时踩到的第一个坑）；
 - 字形、光标、选中框 alpha 恒为 1，所以"背景半透明、文字实心"。
 
-`render = "auto"` 会优先走 GPU；拿不到合成交换链时退回整窗 alpha，并在日志里退化成
-`[VectorTerm] 背板 xxx:整窗 alpha(文字一起变淡)`,观感会明显差一档。
+`WS_EX_NOREDIRECTIONBITMAP` 这个位有个副作用：**没有重定向表面，GDI 就画不上去**。
+所以它只在"配置要玻璃 **且** 这次真的会走 GPU"时才给（窗口创建前先探一次硬件适配器）。
+否则 `render = "cpu"` 会得到一个空窗口——只剩背后的模糊材质，什么字也没有。
+
+`render = "auto"` 会优先走 GPU。拿不到逐像素 alpha 时**不再用整窗 alpha 硬凑**：
+玻璃要的是"背景透、文字实"，整窗 alpha 只能一起变淡，材质还透不出来，是两头不讨好。
+现在保持不透明，并在日志里说明：
+
+```text
+[VectorTerm] 玻璃需要逐像素 alpha,当前后端给不了:已保持不透明(...)。
+             把 render 设为 "auto"/"gpu" 后**重启**才有毛玻璃
+```
+
+也就是说 **毛玻璃只有 GPU 后端（`auto` / `gpu`）才有**，而且 `render` 是启动时定的，
+改完必须重启。想要"整窗一起变淡"那种老式半透明（不配 `win32_system_backdrop`），
+CPU 后端仍然照做。
 
 ## 6. 毛玻璃
 
@@ -157,6 +171,9 @@ accent 模糊作用在窗口自身的合成上，与激活状态无关，所以�
 
 - 单元格里显式设了背景色的内容（选中块、反显、`ls` 的目录底色）也乘 `opacity`，
   叠在玻璃上会略深，这是有意的。
+- **毛玻璃只有 GPU 后端才有**。`render = "cpu"` 拿不到逐像素 alpha，配了
+  `win32_system_backdrop` 也会保持不透明（不会退化成"文字发灰"的整窗 alpha）。
+  改 `render` 需要重启。
 - CPU 后端下不要再去调 `SetLayeredWindowAttributes` 的第二个参数（色键），会和统一 alpha 打架。
 - 合成交换链（`WS_EX_NOREDIRECTIONBITMAP`）的窗口没有系统画的非客户区，圆角/阴影完全依赖
   DWM 自身策略；窗口拖动缩放时旧帧会被 DXGI 拉伸一段（GPU 后端固有行为）。

@@ -1911,12 +1911,20 @@ accent 模糊后,有焦点与失焦时窗口内的梯度能量都是 4.5(窗外�
 
 | 后端 | 机制 | 效果 |
 |---|---|---|
-| `render = "gpu"` | DirectComposition 合成交换链 + 逐像素 alpha | **只有背景层变淡,文字保持实心** |
-| `render = "cpu"` | 层叠窗口 + 整窗 alpha | 文字跟着一起变淡 |
+| `render = "auto"` / `"gpu"` | DirectComposition 合成交换链 + 逐像素 alpha | **只有背景层变淡,文字保持实心**,能配毛玻璃 |
+| `render = "cpu"` | 层叠窗口 + 整窗 alpha | 文字跟着一起变淡;**配了背板时则保持不透明**(见下) |
 
 GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无效)并把交换链挂在
-`IDCompositionVisual` 上,拿不到时自动退回整窗 alpha,日志里会写
-`背板 xxx:整窗 alpha(文字一起变淡)`。
+`IDCompositionVisual` 上。
+
+**CPU 后端给不出逐像素 alpha**,所以有两种情况:
+
+- 只配了 `opacity`(想要"整窗半透明"):如实按整窗 alpha 做,文字会一起变淡;
+- 还配了 `win32_system_backdrop`(想要毛玻璃):**保持不透明**,日志里说明原因 ——
+  整窗 alpha 只会让字发灰,材质又透不出来,不如老老实实给个能看的窗口。
+
+`render` 是启动时定的,**改完必须重启**才会换后端。启动日志里有一行
+`渲染后端:GPU(...)` / `渲染后端:CPU 软渲染`,先看这一行再排查别的。
 
 `0.85` 是"隐约透出背后的窗口",`0.3` 已经相当透。**不写这项就是完全不透明(`1.0`)**,
 即使配了 `win32_system_backdrop` 也不会自动变透明。

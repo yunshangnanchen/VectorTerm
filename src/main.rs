@@ -1774,6 +1774,27 @@ fn set_uniform_alpha(hwnd: isize, alpha: u8) {
         }
     }
 }
+/// 这次启动会不会真的用 GPU 渲染。
+///
+/// 只用来回答一个问题:窗口该不该带 `WS_EX_NOREDIRECTIONBITMAP`。带了才能
+/// 拿逐像素 alpha,但也让 GDI 画不出东西,所以必须先确认 GPU 真的在。
+#[cfg(windows)]
+fn glass_will_use_gpu(cfg: &AppConfig) -> bool {
+    match cfg.render {
+        config::RenderMode::Cpu => false,
+        config::RenderMode::Gpu | config::RenderMode::Auto => {
+            crate::gpu::GpuRenderer::hardware_adapter_available(
+                cfg.gpu_power == config::GpuPower::High,
+            )
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn glass_will_use_gpu(_cfg: &AppConfig) -> bool {
+    false
+}
+
 /// 把"半透明 / 毛玻璃"落到窗口上。
 ///
 /// 两条路,优先级从高到低:
@@ -1801,21 +1822,45 @@ fn apply_window_glass(window: &Window, cfg: &AppConfig, backend: &mut Backend) -
             per_pixel = true;
         }
     }
-    if !per_pixel && cfg.background.needs_transparent_window() {
+    // 后端拿不到逐像素 alpha 时,只剩"整窗统一 alpha"这一条路,而它的语义是
+    // **整块窗口一起变淡**,文字跟着发灰 ——
+    //
+    // * 配了系统背板(用户要玻璃):这条路给不出玻璃,再把字压淡就是纯亏,
+    //   所以保持不透明,等用户换 GPU 后端;
+    // * 没配背板(用户就是要"整窗半透明"):如实照做,这是合理意图。
+    let wants_glass = cfg.background.backdrop != config::Backdrop::None;
+    if per_pixel {
+        clear_uniform_alpha(hwnd);
+    } else if wants_glass {
+        if cfg.background.needs_transparent_window() {
+            crate::wlog!(
+                "[VectorTerm] 玻璃需要逐像素 alpha,当前后端给不了:已保持不透明\
+                 (整窗 alpha 会把文字一起压淡,材质也透不出来)。\
+                 把 render 设为 \"auto\"/\"gpu\" 后**重启**才有毛玻璃"
+            );
+        }
+        clear_uniform_alpha(hwnd);
+    } else if cfg.background.needs_transparent_window() {
         let alpha = (opacity * 255.0).round() as u8;
         set_uniform_alpha(hwnd, alpha);
-    } else if per_pixel {
-        // 之前可能因为切换配置加过 WS_EX_LAYERED,留着会和合成内容打架
-        clear_uniform_alpha(hwnd);
     }
 
     if cfg.background.backdrop != config::Backdrop::None {
-        apply_system_backdrop(hwnd, cfg.background.backdrop);
-        crate::wlog!(
-            "[VectorTerm] 背板 {}:{}(逐像素 alpha)",
-            cfg.background.backdrop.as_str(),
-            if per_pixel { "渲染层合成" } else { "整窗 alpha,背景不透" }
-        );
+        if per_pixel {
+            apply_system_backdrop(hwnd, cfg.background.backdrop);
+            crate::wlog!(
+                "[VectorTerm] 背板 {}:渲染层合成(逐像素 alpha)",
+                cfg.background.backdrop.as_str()
+            );
+        } else {
+            // 整窗 alpha 路径下**不要**碰材质:内容不透明,材质本来也透不出来,
+            // 而 accent 模糊会连窗口自己的内容一起糊掉(字会发虚发淡)。
+            crate::wlog!(
+                "[VectorTerm] 背板 {} 已跳过:整窗 alpha 下材质透不出来,且模糊会把字一起糊掉。\
+                 想要真毛玻璃请把 render 设为 \"auto\"/\"gpu\" 后**重启**",
+                cfg.background.backdrop.as_str()
+            );
+        }
     }
     per_pixel
 }
@@ -4152,6 +4197,9 @@ impl GuiState {
             LogicalSize::new(init_w, init_h).into()
         };
         let icon = app_icon();
+        // 只探一次 GPU:窗口属性、隐藏策略、显示时机都要用它,重复枚举适配器很慢。
+        #[cfg(windows)]
+        let glass_hidden = cfg.background.needs_transparent_window() && glass_will_use_gpu(&cfg);
         let mut attrs = Window::default_attributes()
             .with_title("VectorTerm")
             // Windows 把窗口图标分成两档存,必须都给:
@@ -4186,8 +4234,17 @@ impl GuiState {
             // DWM 在窗口创建那一刻决定要不要给它分一块 redirection surface,
             // 之后再 SetWindowLong 改 ex-style 是不生效的 —— 表现就是交换链的
             // alpha 被整块盖掉,窗口看起来完全不透明。
-            if cfg.background.needs_transparent_window() {
+            //
+            // 反过来这个位也不能无脑给:没有重定向表面,GDI(CPU 后端)的 BitBlt
+            // 画不上去,窗口会**整个空白**。所以只有"配置要玻璃 + 这次真的会走
+            // GPU"时才给 —— GPU 不可用时老老实实走 CPU 的不透明路径。
+            if glass_hidden {
                 attrs = attrs.with_no_redirection_bitmap(true);
+                // GPU 初始化要建实例/设备/交换链,在这之前窗口里什么都画不出来;
+                // 而没有重定向表面的窗口连系统给的空白都留不住 —— 用户会先看到
+                // 一个"全透的空框"两秒多,很容易当成坏了。所以先藏着,等后端就绪
+                // 再显示(见下面 `apply_window_glass` 之后)。
+                attrs = attrs.with_visible(false);
             }
         }
         let window = Arc::new(el.create_window(attrs)?);
@@ -4314,6 +4371,12 @@ impl GuiState {
         // 材质透不出来。整窗 alpha 那条路保持 1.0,免得衰减两遍。
         if apply_window_glass(&window, &cfg, &mut backend) {
             renderer.set_background_alpha_scale(cfg.background.effective_opacity());
+        }
+        // 玻璃路径的窗口是"藏着建"的(见 `with_visible(false)`)。后端与交换链
+        // 都就绪了再露出来,用户就不会先看到几秒钟的空框。
+        #[cfg(windows)]
+        if glass_hidden {
+            window.set_visible(true);
         }
         // ---- 第一个标签 ----
         let mut next_tab_id = 1;
@@ -5493,6 +5556,13 @@ impl GuiState {
         #[cfg(windows)]
         {
             if self.cfg.background.backdrop == config::Backdrop::None {
+                return;
+            }
+            // 只有逐像素 alpha 那条路才值得重设材质:整窗 alpha 下材质透不出来,
+            // 而 accent 模糊会连窗口自己的内容一起糊掉(焦点事件每次都会走到这里,
+            // 漏掉这个判断就等于把"CPU 后端不设材质"的修复又绕回去了)。
+            let per_pixel = matches!(&self.backend, Backend::Gpu(g, _) if g.is_transparent_surface());
+            if !per_pixel {
                 return;
             }
             if let Some(h) = hwnd_of(&self.window) {

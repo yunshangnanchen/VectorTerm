@@ -607,6 +607,21 @@ impl GpuRenderer {
         Self::build(Some(window), 0, 0, prefer_discrete, true)
     }
 
+    /// 不碰窗口地探一下"有没有可用的硬件适配器"。
+    ///
+    /// 窗口创建之前要用它决定 `WS_EX_NOREDIRECTIONBITMAP` —— 那个位一旦给了,
+    /// DWM 就不再给窗口分重定向表面,**GDI(CPU 后端)的 BitBlt 会画不上去**,
+    /// 表现是窗口里空空如也,只剩背后的模糊材质。所以只有确定要走 GPU 时才给。
+    pub fn hardware_adapter_available(prefer_discrete: bool) -> bool {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: BACKENDS,
+            ..Default::default()
+        });
+        let mut policy = AdapterPolicy::from_env(prefer_discrete);
+        policy.list = false;
+        !rank_adapters(&instance, &policy).is_empty()
+    }
+
     /// 无窗口构造:测试用,渲染到离屏纹理再读回
     #[cfg(test)]
     pub fn new_offscreen(width: u32, height: u32) -> anyhow::Result<Self> {
