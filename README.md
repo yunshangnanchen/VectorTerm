@@ -50,26 +50,35 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   DXGI 拉伸旧帧;4K / 高刷场景可一行配置切 GPU。
 - **配置就是 Lua**。键位、颜色、字体、标签栏、动画参数全部可改,保存即热重载;
   `VectorTerm.exe --config .wezterm.lua` 能直接吃 wezterm 原配置。
-- **四套内置配色,直接编进 exe**:DeepSeek 夜空蓝 / ChatGPT 纯灰阶 / Claude 黏土橙 /
-  Gemini 蓝紫粉,用 `include_str!` 嵌进 `VectorTerm.exe`,单个 exe 拷到没有 `config\` 目录的
-  机器上也能照常套用。见 [内置主题](#内置主题)。
+- **五套内置配色,直接编进 exe**:DeepSeek 夜空蓝 / DeepSeek 夜空蓝·半透明磨砂 /
+  ChatGPT 纯灰阶 / Claude 黏土橙 / Gemini 蓝紫粉,用 `include_str!` 嵌进 `VectorTerm.exe`,
+  单个 exe 拷到没有 `config\` 目录的机器上也能照常套用。见 [内置主题](#内置主题)。
 
 > 定位很明确:**不追求跨平台,先把 Windows 做快做爽。**
 
 ## 内置主题
 
-四套都在 [`config/`](config/),结构完全一致(1250×750 窗口、14 号字、行高 1.0、状态栏字号 0.9、
-片段间距 0、空格宽度 0.2),只是配色和状态栏脚本不同:
+都在 [`config/`](config/),前四套结构完全一致(1250×750 窗口、14 号字、行高 1.0、状态栏字号 0.9、
+片段间距 0、空格宽度 0.2),只是配色和状态栏脚本不同;`deepseek-glass` 尺寸一模一样,
+另外多了一层背景渐变 + 整窗半透明:
 
 | 文件 | 风格 | 画布 | 强调色 | 活动标签 |
 |---|---|---|---|---|
 | [`config/deepseek.lua`](config/deepseek.lua) | DeepSeek 夜空蓝 | `#0B1220` | `#4D6BFE` 品牌蓝 | 蓝底白字 |
+| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 半透明磨砂 | 渐变 `#12203A`→`#0A1120`,80% 不透明 | `#5B7CFF` | 蓝底白字 |
 | [`config/chatgpt.lua`](config/chatgpt.lua) | ChatGPT 纯灰阶 | `#212121` | `#FFFFFF` | 白底黑字 |
 | [`config/claude.lua`](config/claude.lua) | Claude 黏土橙 | `#1F1E1D` | `#D97757` | 橙底深墨字 |
 | [`config/gemini.lua`](config/gemini.lua) | Gemini 蓝紫粉 | `#131314` | `#1A73E8` / `#8AB4F8` | 蓝底白字 |
 
 ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 12% 饱和度以便
 `git diff` / `ls` 还能分色);其余三套各有品牌色的分屏渐变与光标尾迹配色。
+
+`deepseek-glass` 是 deepseek 的"玻璃变体":尺寸、字号、标签栏、状态栏脚本逐项相同,
+多的是 `window_background_gradient`(上亮下暗的夜空蓝渐变)+ `window_background_opacity
+= 0.80`(桌面从背后透出 20%)+ 半透明品牌蓝选区。要更透就往下调,低于 0.7 文字会开始
+难读 —— 统一 alpha 是"整块窗口一起变淡",不是只有背景。**真正的 DWM 毛玻璃(Mica /
+Acrylic)当前拿不到**:材质要求客户区对 DWM 逐像素透明,而窗口交换链给不出
+`PREMULTIPLIED` alpha,详见 [自定义背景 §6](docs/custom-background.md)。
 
 **三种用法任选**:
 
@@ -289,7 +298,7 @@ shell,旁边弹出一个独立的 `VectorTerm Debug Console` 列全部日志,ERR
 VectorTerm/
 ├── src/                 实现(render / frame / gpu / cursor / scroll / tabbar / font …)
 ├── settings-gui/        配置管理器(独立 Rust + egui crate,与终端本体零耦合)
-├── config/              config.lua 默认配置 + 四套内置主题(deepseek / chatgpt / claude / gemini)
+├── config/              config.lua 默认配置 + 五套内置主题(deepseek / deepseek-glass / chatgpt / claude / gemini)
 ├── config.example.lua   全部可选项(注释版)
 ├── VectorTermLogo.png       图标母版(1080×1080,tools/gen_icons.py 的输入)
 ├── assets/icons/        由母版生成的分辨率梯子 + VectorTerm.ico(exe 图标)

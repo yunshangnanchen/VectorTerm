@@ -1151,7 +1151,19 @@ impl Renderer {
     pub fn compute_grid(&self, w: u32, h: u32) -> (usize, usize) {
         let cols = ((((w as f64 - 2.0 * self.pad_x) / self.cell_w).floor() as i64).max(2)) as usize;
         let usable = h as f64 - self.content_top - self.content_bottom - 2.0 * self.pad_y;
-        let rows = ((usable / self.cell_h).floor() as i64).max(2) as usize;
+        // 行数除不尽的余量没法摊到行里(行高由字体度量定死),只能留在底部。
+        // 一律 floor 的话,余量最大能接近**一整行** —— 底部看起来就像"多空了
+        // 一行",而且这行空白不随输出滚动,很容易被当成输入行没跟着走。
+        // 这里改成取"底边距最接近 padding 的那一档":余量超过半行就再吃一行,
+        // 让末行往下压 (cell_h - 余量)。压进 padding 的部分不超过 padding
+        // 本身,所以永远不会顶到窗口边框;标签栏在下方时由 clip_bottom 收边。
+        let raw = usable / self.cell_h;
+        let mut rows = raw.floor();
+        let rem = usable - rows * self.cell_h;
+        if rem > self.cell_h * 0.5 && self.cell_h - rem <= self.pad_y {
+            rows += 1.0;
+        }
+        let rows = (rows as i64).max(2) as usize;
         (cols, rows)
     }
 

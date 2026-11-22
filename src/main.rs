@@ -6878,8 +6878,13 @@ impl GuiState {
         }
         // 只滚列表,不抢键盘焦点:侧边栏和 vim 并排时,滚一下不该把输入
         // 从编辑器抢走(想操作列表就点一下,或者按 Ctrl+Shift+E)。
+        //
+        // 方向要取反:winit 的 `y > 0` 是"滚轮向上",而 `scroll_by` 里正数
+        // 是"选中项往下"(列表内容往上走)。直接传过去,滚轮往下的表现就是
+        // 列表往上跑 —— 反了。步长直接用 `lines`(一格 3 行,与终端回看一致);
+        // 再乘 3 会变成一格 9 项,侧边栏一屏才十几行,一下就翻掉半屏。
         if let Some(b) = self.tab.browser.as_mut() {
-            b.scroll_by(lines as isize * 3);
+            b.scroll_by(-(lines as isize));
         }
         self.window.request_redraw();
         true

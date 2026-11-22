@@ -1640,12 +1640,13 @@ fn valid_theme_name(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// 编译期嵌入的主题预设:四套配色随 exe 一起走,不依赖磁盘上的 `config/`。
+/// 编译期嵌入的主题预设:五套配色随 exe 一起走,不依赖磁盘上的 `config/`。
 ///
 /// 分发时只想给一个 `VectorTerm.exe` 也能写 `theme = "chatgpt"`;磁盘上有同名
 /// 文件时仍然以磁盘为准(方便用户改色、覆盖),没有才落到这里。
 pub const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("deepseek", include_str!("../config/deepseek.lua")),
+    ("deepseek-glass", include_str!("../config/deepseek-glass.lua")),
     ("chatgpt", include_str!("../config/chatgpt.lua")),
     ("claude", include_str!("../config/claude.lua")),
     ("gemini", include_str!("../config/gemini.lua")),
@@ -4489,7 +4490,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 四套配色是**编译进 exe** 的(`BUILTIN_THEMES`):分发单个 exe 也能写
+    /// 五套配色是**编译进 exe** 的(`BUILTIN_THEMES`):分发单个 exe 也能写
     /// `theme = "chatgpt"`。这里确认名字和 `config/` 目录一一对应,且每份内嵌
     /// 源码都能独立解析出完整配色 —— 否则打包时漏一个文件,用户那边就是
     /// "主题不存在"。
@@ -4554,6 +4555,7 @@ mod tests {
     /// 启动就整份掉回内置默认值(配色、窗口尺寸全没了),所以让测试把目录扫一遍。
     ///
     /// 四套"整套配置"(deepseek / chatgpt / claude / gemini)还要求**只差颜色**:
+    /// (`deepseek-glass` 是同尺寸的半透明变体,只要求能解析,不参与下面这组比对)
     /// 窗口尺寸、字号、留白、状态栏参数必须一致,否则切主题会顺带换掉布局。
     #[test]
     fn shipped_configs_all_parse() {

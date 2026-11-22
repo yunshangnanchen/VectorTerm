@@ -109,6 +109,24 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
 
 之所以保留解析：wezterm 的配置能整段搬过来不至于报错。想要半透明效果请用 `window_background_opacity`。
 
+### 6.1 另外两条路也试过了（都无效，别再试）
+
+除了 DWM 的 backdrop 属性，还实测过 Windows 上的两个"老牌做法"，两者的返回都成功、
+画面却**一个像素都没变**（前后两次屏幕截图逐字节相同）：
+
+| 试法 | 结果 |
+|---|---|
+| `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)` + `ACCENT_ENABLE_ACRYLICBLURBEHIND` | 对 `WS_EX_LAYERED` + `LWA_ALPHA` 的半透明窗口不生效 —— DWM 不对层叠窗口应用材质 |
+| 同上，`ACCENT_ENABLE_BLURBEHIND`（Win10 经典模糊） | 同样不生效 |
+| `LWA_COLORKEY`（把底色 `#010203` 设成透明色）替代 `LWA_ALPHA` | 交换链输出的像素颜色经 GPU/DWM 合成后与键值对不上，背景依旧不透明；而且颜色键与统一 alpha 互斥 |
+
+结论不变：**想要"背景模糊"必须换合成表面**（`CreateSwapChainForComposition` + DirectComposition），
+属于渲染层改动，配置层做不到。现有的"磨砂"只能来自 `window_background_blur`（模糊的是
+窗外自己那张图，不是窗后的桌面/窗口）。
+
+复现脚本：`tools/diagnostics/acrylic_probe.py`（层叠窗口 + accent）、
+`tools/diagnostics/acrylic_key_probe.py`（颜色键 + accent）。
+
 ## 7. 代价
 
 - **内存**：一张 2560×1440 的 RGBA 背景约 14MB（CPU 与 GPU 各持一份）。

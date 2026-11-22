@@ -197,13 +197,13 @@ return {
 
 `theme = "name"` 仍然支持,作为"配色底表":它只影响**同一份配置里没写到的键**。
 日常使用不必用它 —— 直接把 `deepseek.lua`(或 `chatgpt.lua` / `claude.lua` /
-`gemini.lua`)设为当前配置更直观。
+`gemini.lua` / `deepseek-glass.lua`)设为当前配置更直观。
 
 - **当前配置**:`current\` 里唯一那份,见 [§2.1](#21-查找顺序)。
 - **主题底表(可选)**:配置里写 `theme = "deepseek"`,终端会先找
   `config/deepseek.lua` 当底层,再把你这份配置的字段深合并盖上去。
 
-四套配色是**编译进 exe 的**(`config.rs` 里 `BUILTIN_THEMES` 用 `include_str!`
+五套配色是**编译进 exe 的**(`config.rs` 里 `BUILTIN_THEMES` 用 `include_str!`
 把 `config/*.lua` 嵌进二进制),所以只拷一个 `VectorTerm.exe` 出去,`theme =
 "chatgpt"` 照样能用,不依赖磁盘上的 `config\` 目录。磁盘上存在同名文件时仍以
 磁盘为准 —— 你想改某套配色,复制一份放到配置同级目录改就行。
@@ -234,7 +234,7 @@ return {
 |---|---|
 | 合并方式 | 先解析主题表,再把你写的键**深合并**盖上去。同名的表递归合并,所以只改 `colors.foreground` 时,主题里的 `colors.ansi` / `tab_bar` / `scrollbar` 等全部保留 |
 | 名字限制 | 只允许字母 / 数字 / `-` / `_`,最长 64 字符;`..`、斜杠、绝对路径一律拒绝(防止读到程序目录外的文件) |
-| 查找顺序 | ① 配置文件同目录 `themes/<name>.lua` → ② 同目录 `<name>.lua` → ③ `<exe 目录>\config\themes\<name>.lua` → ④ `<exe 目录>\config\<name>.lua` → ⑤ 工作目录下同样两处(开发时用) → ⑥ **exe 内置副本**(`deepseek` / `chatgpt` / `claude` / `gemini` 四套,磁盘上都没有时才用) |
+| 查找顺序 | ① 配置文件同目录 `themes/<name>.lua` → ② 同目录 `<name>.lua` → ③ `<exe 目录>\config\themes\<name>.lua` → ④ `<exe 目录>\config\<name>.lua` → ⑤ 工作目录下同样两处(开发时用) → ⑥ **exe 内置副本**(`deepseek` / `deepseek-glass` / `chatgpt` / `claude` / `gemini` 五套,磁盘上都没有时才用) |
 | 找不到 / 语法错 | 按普通配置错误处理:窗口照常用内置默认配置打开,原因写进 `config-error.log`;报错里会列出可用的内置主题名 |
 | 不写 `theme` 也行 | 把 `deepseek.lua` 设为当前配置,或 `VectorTerm.exe --config "<exe 目录>\config\deepseek.lua"` |
 
@@ -303,6 +303,32 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 活动标签是白底黑字。只有 ANSI 16 色保留了低饱和的功能色 —— `git diff`、
 `ls`、编译器输出要靠色相区分,压到近灰但不至于全变一色。想彻底纯灰,把
 `colors.ansi` / `colors.brights` 换成几级灰即可。
+
+#### 半透明磨砂变体:`deepseek-glass.lua`
+
+`deepseek` 的玻璃版,**尺寸逐项相同**(1250×750、14 号字、行高 1.0、padding 10、
+顶部标签栏、同一段状态栏脚本),换过去窗口不会变大变小。差别只有三处:
+
+| 键 | 值 | 作用 |
+|---|---|---|
+| `window_background_gradient` | `{ "#12203A", "#0A1120" }` 竖向 | 上亮下暗的夜空蓝渐变,像玻璃上沿的一道反光 |
+| `window_background_opacity` | `0.80` | 整窗 80% 不透明,桌面从背后透出 20% |
+| `selection.opacity` | `0.30` | 选区是半透明品牌蓝,选中代码时渐变还能透出来 |
+
+配色也顺带提了一档(`foreground` `#F2F6FF`、`cursor_bg` / `ansi[4]` `#5B7CFF`),
+因为统一 alpha 会把文字一起变淡,不提亮会发灰。
+
+> **透明度是"整块窗口"的,不是"只有背景"的。** `opacity = 0.80` 表示窗口
+> 80% 不透明,文字同样跟着变淡;想要"背景透、文字实"需要逐像素 alpha,见
+> [自定义背景 §5 / §6](custom-background.md)。
+>
+> **真正的 DWM 毛玻璃(Mica / Acrylic)当前透不出来**:材质由 DWM 画在窗口
+> 背后,要求客户区对它逐像素透明,而 `CreateSwapChainForHwnd` 不接受
+> `PREMULTIPLIED` alpha、软渲染的 GDI `BitBlt` 也没有 alpha 通道。所以这份
+> 预设**故意不写** `win32_system_backdrop`,免得每次启动多一条警告。想要
+> "磨砂纹理"可以自己糊一张壁纸:`window_background_image` +
+> `window_background_blur = 18`(注意相对路径按配置文件所在目录解析,
+> 「设为当前配置」复制到 `current\` 后会失效)。
 
 ### 2.6 配置目录结构(current/ 与 keys/)
 
@@ -826,6 +852,11 @@ padding = 10
 window_padding = { left = 6, right = 6, top = 10, bottom = 6 }
 ```
 
+> 行高由字体度量定死,可用高度除不尽时会剩不到一行的余量。这份余量按
+> 「让底边距最接近 `padding`」处理:余量过半行就多算一行(末行往下压进
+> 底部留白),因此输入行离下边框的距离始终和 `padding` 同一量级,不会莫名
+> 空出一整行 —— 空出来的那点高度会变成一行可用的显示行,PTY 行数同步 +1。
+
 ### 7.2 初始窗口尺寸
 
 | 键 | 类型 | 默认 | 说明 |
@@ -1201,7 +1232,7 @@ return {
   一档,再把墨迹中线对齐到文字中线 —— 所以电池不会比旁边的 `97%` 高出一截、
   底边也不会坠到基线下面;本来就小的图标保持原样,只做中线对齐。
 - `space_width` 收窄之后,图标两侧只留一个空格会显得贴脸(0.2 字宽 ≈ 2px),
-  脚本里给图标两边各写**两个空格**就自然了 —— 内置四套主题都是这么写的。
+  脚本里给图标两边各写**两个空格**就自然了 —— 内置五套主题都是这么写的。
 - `height` 撑高的是**整条栏**(标签也跟着变高),状态栏和标签共用这一条。
 - 想彻底改内容还是改脚本;`status_bar.text` 只是"再补一段固定文字"的捷径,
   它排在脚本结果的右边。
@@ -2345,7 +2376,7 @@ pane_focus = {
 | `r` | 重新读目录 |
 | `Esc` / `q` | 关闭面板(侧边栏关闭后终端恢复全宽) |
 | 鼠标左键 | 点一下选中;在同一行再点一次 = 打开 |
-| 鼠标滚轮 | 滚列表(不抢键盘焦点) |
+| 鼠标滚轮 | 滚列表(不抢键盘焦点)。一格 3 项,往下滚 → 列表朝后面的条目走 |
 
 点击终端区域会把键盘交还给 shell;再按 `Ctrl+Shift+E` 可以把焦点拉回列表。
 
