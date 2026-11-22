@@ -974,6 +974,13 @@ pub struct Renderer {
     bg: Vec<crate::frame::BgLayer>,
     /// 自定义纯色背景(覆盖调色板的 bg)
     bg_color: Option<Rgb>,
+    /// 单元格自设底色那层的不透明度(`text_background_opacity`,默认 1.0)。
+    ///
+    /// 与窗口不透明度分开:窗口那层管的是"清屏色 + 壁纸 + 标签栏",这块管的是
+    /// 提示符色块、反显、`ls` 目录底色这些**刻意上色**的格子。合在一起的话,
+    /// powerline 提示符的填色会被玻璃冲淡,而它两端的圆角是前景字形、不会被
+    /// 冲淡,同一条色块就成了"两头亮中间灰"。
+    text_bg_opacity: f32,
     /// 光标本体样式;默认整格方块、不闪、不动,与旧版本逐像素一致
     pub cursor_style: CursorVisual,
     /// 当前闪烁周期相位(0..1),主循环每帧下发
@@ -983,6 +990,13 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// 单元格自设底色的不透明度(`text_background_opacity`)。1.0 = 原色。
+    ///
+    /// 改配置时热重载:下一帧就生效,不用重建渲染器。
+    pub fn set_text_background_opacity(&mut self, alpha: f32) {
+        self.text_bg_opacity = alpha.clamp(0.0, 1.0);
+    }
+
     pub fn new(cfg: &AppConfig, scale: f64) -> anyhow::Result<Self> {
         let em_px = cfg.fonts.size * scale as f32;
         let dirs = cfg.fonts.dirs.clone();
@@ -1109,6 +1123,7 @@ impl Renderer {
                 .color
                 .as_deref()
                 .and_then(crate::term::color_from_str),
+            text_bg_opacity: cfg.background.text_opacity.clamp(0.0, 1.0),
             cursor_style: CursorVisual::from(&cfg.cursor),
             cursor_blink_phase: 0.0,
             cursor_anim_t: 0.0,
@@ -1409,13 +1424,31 @@ impl Renderer {
                     //   看不出来但保证覆盖
                     // - 有壁纸/渐变/自定义纯色:必须让位,否则每格一个不透明
                     //   矩形会把整张背景盖死(清屏色已经铺满,不会露底)
-                    // 底色属于"背景层":它和清屏色、壁纸一起合成,再整体按
-                    // `window_background_opacity` 透出去,所以走 `rect_bg`
-                    // (GPU 端不写 alpha 的那条管线)。
+                    //
+                    // 两条路分开走:
+                    // - **默认底色**属于画布,和清屏色、壁纸一起合成后整体按
+                    //   `window_background_opacity` 透出去(`rect_bg`);
+                    // - **显式设了底色**的格子(powerline 提示符、进度条、反显、
+                    //   `ls` 的目录底色)属于内容,必须不透明。当成画布处理的话
+                    //   颜色会被乘上 opacity 再透出去,`#8AADF4` 的提示符段落会
+                    //   变成半透明的灰蓝,和旁边同色的圆角字形一对比就像"渲染坏了"。
                     let default_bg = cell.bg == palette.bg;
                     let draw_bg = !default_bg || (self.bg.is_empty() && self.bg_color.is_none());
                     if draw_bg {
-                        frame.rect_bg(cx, y, self.cell_w, self.cell_h, cell.bg, 1.0);
+                        if default_bg {
+                            frame.rect_bg(cx, y, self.cell_w, self.cell_h, cell.bg, 1.0);
+                        } else {
+                            // 默认 1.0(不透明);用户显式调低
+                            // `text_background_opacity` 才跟着变透
+                            frame.rect(
+                                cx,
+                                y,
+                                self.cell_w,
+                                self.cell_h,
+                                cell.bg,
+                                self.text_bg_opacity,
+                            );
+                        }
                     }
                     if self.images_enabled {
                         for im in &cell.images {

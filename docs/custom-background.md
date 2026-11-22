@@ -12,6 +12,7 @@
 | `window_background_blur` | 0~200 | 模糊半径（图片像素），`8~24` 是磨砂感 |
 | `window_background_fill` | `cover` / `contain` / `stretch` / `tile` / `center` | 填充方式，默认 `cover` |
 | `window_background_opacity` | 0~1 | 整块背景的不透明度，默认 1，叠几层背景也只乘一次，见第 5 节 |
+| `text_background_opacity` | 0~1 | 单元格**自设**底色（提示符色块、反显、`ls` 目录色）的不透明度，默认 1（不透明），见第 5 节 |
 | `window_background_gradient` | `{ colors = {a,b}, orientation }` | 两色渐变，画在图片下面 |
 | `win32_system_backdrop` | `none` / `mica` / `acrylic` / `tabbed` | 系统背板材质，`acrylic` 即毛玻璃，见第 6 节 |
 
@@ -173,8 +174,9 @@ accent 模糊作用在窗口自身的合成上，与激活状态无关，所以�
 
 ## 8. 已知限制
 
-- 单元格里显式设了背景色的内容（选中块、反显、`ls` 的目录底色）也乘 `opacity`，
-  叠在玻璃上会略深，这是有意的。
+- 显式设了背景色的单元格（提示符色块、进度条、反显、`ls` 的目录底色）算**内容**，
+  保持不透明 —— 它们是被排版出来的"图形"，跟着窗口一起变淡会直接毁掉对比度：
+  `#8AADF4` 的 oh-my-posh 段落会变成半透明灰蓝，和旁边同色的圆角字形一比就像渲染坏了。
 - **毛玻璃只有 GPU 后端才有**。`render = "cpu"` 拿不到逐像素 alpha，配了
   `win32_system_backdrop` 也会保持不透明（不会退化成"文字发灰"的整窗 alpha）。
   改 `render` 需要重启。

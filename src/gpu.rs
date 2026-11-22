@@ -2146,6 +2146,86 @@ mod tests {
         assert_eq!(fg_a, 255, "内容类填充必须保持不透明,否则文字会跟着变淡");
     }
 
+    /// 显式设了底色的格子(SGR `48;2;…`)属于内容:玻璃窗口下也必须不透明。
+    ///
+    /// 把它当成"画布"处理的话,颜色会被乘上 `window_background_opacity` 再透出去,
+    /// oh-my-posh 那种 `#8AADF4` 的提示符段落会变成半透明灰蓝 —— 而同一行里用
+    /// 同色画出来的圆角字形仍然是亮的,一比就像"美化效果渲染坏了"。
+    #[test]
+    fn colored_cell_bg_stays_opaque() {
+        let cfg = AppConfig::default();
+        let (cols, rows) = (20usize, 3usize);
+        let size = TerminalSize {
+            rows,
+            cols,
+            pixel_width: cols * 10,
+            pixel_height: rows * 20,
+            dpi: 96,
+        };
+        let mut t = crate::term::create_terminal(size, &cfg, Box::new(std::io::sink()));
+        t.advance_bytes(
+            b"\x1b[48;2;138;173;244m\x1b[38;2;73;77;100mDYBAG@HOST ~\x1b[0m\r\n\x1b[0mplain",
+        );
+        let (snap, cursor, palette) = render::snapshot(&t, cols, 0.0);
+        let mut r = render::Renderer::new(&cfg, 1.0).unwrap();
+        let (w, h) = (
+            (cols as f64 * r.cell_w + 2.0 * r.pad_x) as u32,
+            (rows as f64 * r.cell_h + 2.0 * r.pad_y) as u32,
+        );
+        let mut frame = Frame::default();
+        r.build_frame(
+            &mut frame,
+            w,
+            h,
+            &snap,
+            &cursor,
+            &palette,
+            None,
+            palette.cursor_bg,
+            true,
+        );
+
+        let mut gpu = match GpuRenderer::new_offscreen(w, h) {
+            Ok(g) => g,
+            Err(e) => {
+                crate::wlog!("跳过显式底色测试:没有可用适配器({e:#})");
+                return;
+            }
+        };
+        gpu.set_background_alpha(0.5);
+        gpu.draw(&frame, &r).expect("GPU 绘制");
+        let px = gpu.read_pixels();
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            (
+                px[i] as i32,
+                px[i + 1] as i32,
+                px[i + 2] as i32,
+                px[i + 3] as i32,
+            )
+        };
+
+        // 第一行提示符段落:取格子顶部两像素,避开字形笔画
+        let (x, y) = (
+            r.pad_x.round() as u32 + 3,
+            r.pad_y.round() as u32 + 1,
+        );
+        let (cr, cg, cb, ca) = at(x, y);
+        assert_eq!(ca, 255, "显式底色必须不透明,否则提示符色块会发灰");
+        assert!(
+            (cr - 138).abs() <= 2 && (cg - 173).abs() <= 2 && (cb - 244).abs() <= 2,
+            "显式底色不该被 opacity 衰减,实际 ({cr},{cg},{cb})"
+        );
+
+        // 第二行普通格子:仍是半透明的画布
+        let y2 = r.pad_y.round() as u32 + r.cell_h.round() as u32 + 1;
+        let (_, _, _, a2) = at(x, y2);
+        assert!(
+            (a2 - 128).abs() <= 2,
+            "画布底色应当只有 50% 不透明,实际 {a2}"
+        );
+    }
+
     /// 横向裁剪两条后端都得认:CPU 夹 x 区间,GPU 收 scissor 宽度。
     ///
     /// 侧边栏滑入/滑出全靠它 —— 少一条的表现是"滑动中的面板糊到左邻窗格的

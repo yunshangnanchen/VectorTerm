@@ -8805,6 +8805,9 @@ impl GuiState {
         // 光标形状 / 长宽 / 闪烁 / 动画是纯渲染参数,直接换样式即可,
         // 不用重建 Renderer(重建会重新加载整套字体)
         self.renderer.cursor_style = render::CursorVisual::from(&self.cfg.cursor);
+        // 单元格自设底色的透明度(`text_background_opacity`)也是纯渲染参数
+        self.renderer
+            .set_text_background_opacity(self.cfg.background.text_opacity);
         // 活动标签 + 后台标签的所有 pane 都换调色板/回看行数/动画参数
         for p in self.tab.panes.iter_mut() {
             p.trail = CursorTrail::new(&self.cfg.cursor);

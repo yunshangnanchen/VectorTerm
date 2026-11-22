@@ -711,6 +711,13 @@ pub struct BackgroundConfig {
     pub blur: f32,
     /// 背景不透明度 0..=1。`None` = 未设置(不透明;开背板时默认全透明)
     pub opacity: Option<f32>,
+    /// 单元格**自身设了底色**时那层底色的不透明度 0..=1(wezterm 同名项)。
+    ///
+    /// 默认 1.0 = 不透明:powerline 提示符、`ls` 的目录底色、反显这些刻意
+    /// 上色的块保持原色。低于 1 时它们跟着变透明,代价是块里的文字会跟
+    /// 背后的玻璃混在一起。默认底色(= 调色板 bg)的格子不受它影响,永远
+    /// 跟着 `opacity` 走。
+    pub text_opacity: f32,
     pub backdrop: Backdrop,
     pub gradient: Option<Gradient>,
 }
@@ -726,6 +733,7 @@ impl Default for BackgroundConfig {
             fill: ImageFill::Cover,
             blur: 0.0,
             opacity: None,
+            text_opacity: 1.0,
             backdrop: Backdrop::None,
             gradient: None,
         }
@@ -2896,6 +2904,11 @@ fn parse_background(tbl: &mlua::Table, bg: &mut BackgroundConfig) {
     if let Ok(Some(v)) = tbl.get::<Option<f64>>("window_background_opacity") {
         bg.opacity = Some(v.clamp(0.0, 1.0) as f32);
     }
+    // text_background_opacity = 1.0(wezterm 同名项):单元格自设底色的透明度。
+    // 不写就是 1.0 —— 提示符的色块、ls 的目录底色保持原色,不会被玻璃冲淡。
+    if let Ok(Some(v)) = tbl.get::<Option<f64>>("text_background_opacity") {
+        bg.text_opacity = v.clamp(0.0, 1.0) as f32;
+    }
     // win32_system_backdrop = "Acrylic" (wezterm 同名项)
     if let Ok(Some(v)) = tbl.get::<Option<String>>("win32_system_backdrop") {
         match Backdrop::parse(&v) {
@@ -4206,6 +4219,30 @@ mod tests {
         assert!(d.background.is_plain());
         assert_eq!(d.background.fill, ImageFill::Cover);
         assert!(!d.background.needs_transparent_window());
+    }
+
+    /// `text_background_opacity`:单元格自设底色的透明度,默认 1.0(不透明)。
+    ///
+    /// 和 `window_background_opacity` 是两回事:后者管画布(清屏色/壁纸/标签栏),
+    /// 前者管提示符色块、反显、`ls` 目录底色这些被排版出来的色块。默认不透明,
+    /// 否则 powerline 段落会被玻璃冲淡,而它两端的圆角字形不会 —— 同一条色块
+    /// 就成了"两头亮、中间灰"。
+    #[test]
+    fn text_background_opacity_is_separate_from_window_opacity() {
+        let d = parse_str("return {}");
+        assert_eq!(d.background.text_opacity, 1.0, "不写就是不透明");
+
+        let c = parse_str(
+            r#"return { window_background_opacity = 0.4, text_background_opacity = 0.7 }"#,
+        );
+        assert!((c.background.effective_opacity() - 0.4).abs() < 1e-6);
+        assert!((c.background.text_opacity - 0.7).abs() < 1e-6);
+
+        // 夹到 0..=1
+        let c = parse_str("return { text_background_opacity = 9 }");
+        assert_eq!(c.background.text_opacity, 1.0);
+        let c = parse_str("return { text_background_opacity = -3 }");
+        assert_eq!(c.background.text_opacity, 0.0);
     }
 
     /// 开了毛玻璃却没设 opacity 时,背景必须让位(否则材质被自己的不透明背景盖住)

@@ -1832,6 +1832,7 @@ HSB 调整、模糊都在**加载时做一次**,产出的位图同时交给 CPU 
 | `window_background_image_blur` | 数字 | `0` | 上面那项的别名,两个都写时后者生效 |
 | `window_background_fill` | 字符串 | `"cover"` | 缩放 / 填充方式,见 13.3 |
 | `window_background_opacity` | 数字 | 无 | 背景不透明度 0–1(叠几层也只乘一次),夹到区间,见 13.6 |
+| `text_background_opacity` | 数字 | `1.0` | 单元格**自设**底色的透明度 0–1,见 13.6 |
 | `win32_system_backdrop` | 字符串 | `"none"` | Win11 系统背板,见 13.5 |
 | `window_background_gradient` | 表 | 无 | 渐变,见 13.4 |
 
@@ -1916,15 +1917,29 @@ accent 模糊后,有焦点与失焦时窗口内的梯度能量都是 4.5(窗外�
 GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无效)并把交换链挂在
 `IDCompositionVisual` 上。
 
-**这个值只乘一次。** 背景不是单独一层:清屏色、渐变/壁纸、单元格底色、标签栏底色
+**这个值只乘一次。** 背景不是单独一层:清屏色、渐变/壁纸、默认单元格底色、标签栏底色
 是依次叠上去的,早先实现让每一层各乘一遍 `opacity`,于是总不透明度变成
 `1-(1-a)^n` —— `0.35` 在内容区实际是 0.58,标签栏那块叠了三层是 0.73,看起来就是
 标签栏下方一条更实的横带。现在背景类填行走一条**不写目标 alpha** 的管线
 (颜色乘以 `opacity`,alpha 只由清屏写一次),所以:
 
 - `0.35` 就是 35% 不透明,和叠了几层背景无关;
-- 标签栏、单元格底色与内容区严格一致;
+- 标签栏、默认底色与内容区严格一致;
 - 文字、光标、图片属于前景,完全不参与,永远实心。
+
+**显式设了背景色的格子不算背景。** SGR 给的底色(oh-my-posh 提示符段落、进度条、
+反显、`ls` 目录底色)是排版内容,保持不透明 —— 否则 `#8AADF4` 的段落会变成半透明
+灰蓝,跟同一行里同色的圆角字形一比就像渲染坏了。
+
+想让这些色块也跟着变透,用 wezterm 的同名项 `text_background_opacity`(默认 `1.0`):
+
+```lua
+window_background_opacity = 0.55,  -- 画布:清屏色、壁纸、标签栏
+text_background_opacity   = 1.0,   -- 提示符色块、反显、ls 目录底色(默认不透明)
+```
+
+它只影响**自设底色**的格子;默认底色的格子永远跟着 `window_background_opacity` 走。
+调到 `0.3` 之类的值时,色块里的文字会和背后的玻璃混在一起 —— 想要清晰的提示符就别动它。
 
 **CPU 后端给不出逐像素 alpha**,所以有两种情况:
 
@@ -3034,6 +3049,7 @@ return {
   -- window_background_blur = 12,                       -- 0–200
   -- window_background_fill = "cover",                  -- cover|contain|stretch|tile|center
   -- window_background_opacity = 0.92,                  -- 背景不透明度(文字不变淡)
+  -- text_background_opacity = 1.0,                     -- 提示符色块等自设底色的透明度
   -- win32_system_backdrop = "none",                    -- none|mica|acrylic|tabbed
   -- window_background_gradient = {
   --   colors = { "#0b1020", "#1b2a4a" },
@@ -3350,6 +3366,7 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | `window_background_blur` | `0` |
 | `window_background_fill` | `"cover"` |
 | `window_background_opacity` | 无(不透明) |
+| `text_background_opacity` | `1.0`(不透明) |
 | `win32_system_backdrop` | `"none"` |
 | `window_background_gradient` | 无 |
 | `images.enable` | `true` |
