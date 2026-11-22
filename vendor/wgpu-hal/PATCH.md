@@ -5,7 +5,7 @@
 
 升级 wgpu 时**不要直接覆盖本目录**：先看下面这处改动，重新在新版本里处理完再换。
 
-## 唯一的改动
+## 改动一：交换链 Scaling / SwapEffect 环境变量钩子
 
 `src/dx12/mod.rs` 的 `Surface::configure`，建交换链那一段（原版是 `Scaling: Dxgi::DXGI_SCALING_STRETCH` 硬编码）：
 
@@ -25,7 +25,7 @@ let effect = match std::env::var("VECTORTERM_DX_EFFECT").as_deref() {
 
 **不设环境变量时行为与原版完全一致。**
 
-## 为什么留这个钩子
+### 为什么留这个钩子（改动一）
 
 `docs/resize-fix-plan.md` 的 L1 方案要把 `DXGI_SCALING_STRETCH` 换成 `DXGI_SCALING_NONE`
 来消除拖动缩放时的拉伸抖动。有了这个钩子，验证这件事不需要改代码、不需要重新编译：
@@ -36,10 +36,26 @@ VECTORTERM_DX_SCALING=none ./target/release/VectorTerm.exe
 
 `VECTORTERM_DX_EFFECT` 是配套的对照组（`FLIP_SEQUENTIAL` + `NONE` 是 MSDN 明确支持的组合）。
 
-## 顺带记一笔：不要在这里改 alpha 模式
+## 改动二：逐像素 alpha（合成交换链）
 
-曾经在这个 crate 里把 `composite_alpha_modes` 加进 `PreMultiplied` 并让
-`map_acomposite_alpha_mode()` 如实映射，想让透明背景生效。结论是**这条路不通**：
-`CreateSwapChainForHwnd` 对 `DXGI_ALPHA_MODE_PREMULTIPLIED` 一律返回 `0x887A0001`，
-跟 `Scaling` / `SwapEffect` 无关（四种组合都试过）。两处改动已还原成原版。
-半透明改用层叠窗口统一 alpha 实现，见 `docs/custom-background.md` 第 5 节。
+两处，配合 DirectComposition 使用（见 `docs/custom-background.md` 第 5.1 节）：
+
+1. `src/auxil/dxgi/conv.rs` 的 `map_acomposite_alpha_mode()` 原本把一切映射成
+   `DXGI_ALPHA_MODE_IGNORE`，现在如实映射 `PreMultiplied` / `STRAIGHT` / `IGNORE`。
+2. `src/dx12/adapter.rs` 的 `surface_capabilities`：`WndHandle` 目标只报
+   `Opaque`（hwnd 交换链确实不支持预乘 alpha），
+   `Visual` / `SurfaceHandle` / `SwapChainPanel` 目标才报 `PreMultiplied`。
+
+关键点：**能不能用预乘 alpha，取决于 surface target 而不是参数组合**。
+
+`CreateSwapChainForHwnd` 对 `DXGI_ALPHA_MODE_PREMULTIPLIED` 一律返回 `0x887A0001`
+（`Scaling` / `SwapEffect` 四种组合都试过，与它们无关），所以 hwnd 目标必须只报
+`Opaque`，否则 wgpu 会挑一个创建必然失败的配置。
+
+走 `SurfaceTargetUnsafe::CompositionVisual(visual_ptr)`（`CreateSwapChainForComposition`）
+时预乘 alpha 才被接受，此时窗口还必须带 `WS_EX_NOREDIRECTIONBITMAP`
+（**创建窗口时就要给**，事后 `SetWindowLongW` 无效），并且每帧 `Present` 之后要补一次
+`IDCompositionDevice::Commit`。
+
+早期曾把这两处改动还原过，因为当时只试了 hwnd 交换链，得出"这条路不通"的结论——
+换成合成交换链后才成立。

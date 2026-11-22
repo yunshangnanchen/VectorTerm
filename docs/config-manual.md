@@ -307,28 +307,22 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 #### 半透明磨砂变体:`deepseek-glass.lua`
 
 `deepseek` 的玻璃版,**尺寸逐项相同**(1250×750、14 号字、行高 1.0、padding 10、
-顶部标签栏、同一段状态栏脚本),换过去窗口不会变大变小。差别只有三处:
+顶部标签栏、同一段状态栏脚本),换过去窗口不会变大变小。差别只有四处:
 
 | 键 | 值 | 作用 |
 |---|---|---|
-| `window_background_gradient` | `{ "#12203A", "#0A1120" }` 竖向 | 上亮下暗的夜空蓝渐变,像玻璃上沿的一道反光 |
-| `window_background_opacity` | `0.80` | 整窗 80% 不透明,桌面从背后透出 20% |
-| `selection.opacity` | `0.30` | 选区是半透明品牌蓝,选中代码时渐变还能透出来 |
+| `window_background_opacity` | `0.35` | 背景层 35% 不透明,桌面从背后透出 |
+| `win32_system_backdrop` | `"Acrylic"` | 真毛玻璃(accent 模糊,失焦不掉,见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
+| `text_glow` | `{ enabled = true, color = "#7AA2FF", intensity = 0.55, radius = 1.5 }` | 文字外面一圈蓝色柔光(见 [§13.7](#137-text_glow文字发光)) |
+| `selection.opacity` | `0.30` | 选区是半透明品牌蓝 |
+
+> **必须走 GPU 后端。** 背景半透明 + 文字实心靠的是逐像素 alpha
+> (DirectComposition 合成交换链,`render = "auto"` 会自动选上)。退回 CPU 后端
+> 时是整窗 alpha,文字会跟着一起变淡,日志里会写
+> `背板 acrylic:整窗 alpha(文字一起变淡)`。
 
 配色也顺带提了一档(`foreground` `#F2F6FF`、`cursor_bg` / `ansi[4]` `#5B7CFF`),
-因为统一 alpha 会把文字一起变淡,不提亮会发灰。
-
-> **透明度是"整块窗口"的,不是"只有背景"的。** `opacity = 0.80` 表示窗口
-> 80% 不透明,文字同样跟着变淡;想要"背景透、文字实"需要逐像素 alpha,见
-> [自定义背景 §5 / §6](custom-background.md)。
->
-> **真正的 DWM 毛玻璃(Mica / Acrylic)当前透不出来**:材质由 DWM 画在窗口
-> 背后,要求客户区对它逐像素透明,而 `CreateSwapChainForHwnd` 不接受
-> `PREMULTIPLIED` alpha、软渲染的 GDI `BitBlt` 也没有 alpha 通道。所以这份
-> 预设**故意不写** `win32_system_backdrop`,免得每次启动多一条警告。想要
-> "磨砂纹理"可以自己糊一张壁纸:`window_background_image` +
-> `window_background_blur = 18`(注意相对路径按配置文件所在目录解析,
-> 「设为当前配置」复制到 `current\` 后会失效)。
+玻璃背景下对比度不够会发灰。
 
 ### 2.6 配置目录结构(current/ 与 keys/)
 
@@ -1838,7 +1832,7 @@ HSB 调整、模糊都在**加载时做一次**,产出的位图同时交给 CPU 
 | `window_background_blur` | 数字 | `0` | 模糊半径(相对图片原始像素),夹到 0–200 |
 | `window_background_image_blur` | 数字 | `0` | 上面那项的别名,两个都写时后者生效 |
 | `window_background_fill` | 字符串 | `"cover"` | 缩放 / 填充方式,见 13.3 |
-| `window_background_opacity` | 数字 | 无 | 整窗不透明度 0–1,夹到区间 |
+| `window_background_opacity` | 数字 | 无 | 背景层不透明度 0–1,夹到区间,见 13.6 |
 | `win32_system_backdrop` | 字符串 | `"none"` | Win11 系统背板,见 13.5 |
 | `window_background_gradient` | 表 | 无 | 渐变,见 13.4 |
 
@@ -1894,32 +1888,63 @@ window_background_gradient = {
 - 只支持线性两色渐变,不支持 wezterm 的多色标;
 - **图片存在时渐变画在图片下面**,只有图片半透明才透得出来。
 
-### 13.5 `win32_system_backdrop`:Win11 毛玻璃
+### 13.5 `win32_system_backdrop`:毛玻璃
 
-| 值 | 别名 | 对应 DWM 材质 |
+| 值 | 别名 | 实现 |
 |---|---|---|
 | `"none"` | `"disable"` / `"off"` / `""` | 不启用 |
-| `"mica"` | `"mainwindow"` | `DWMSBT_MAINWINDOW` |
-| `"acrylic"` | `"transientwindow"` / `"blur"` | `DWMSBT_TRANSIENTWINDOW` |
+| `"mica"` | `"mainwindow"` / `"auto"` | `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_MAINWINDOW` |
+| `"acrylic"` | `"transientwindow"` / `"blur"` | accent 模糊(`ACCENT_ENABLE_BLURBEHIND`),失焦不掉 |
 | `"tabbed"` | — | `DWMSBT_TABBEDWINDOW` |
-| `"auto"` | — | 等同 `mica` |
 
-> **当前实现只设 DWM 属性,材质透不出来**。原因:材质要靠"窗口客户区对 DWM
-> 逐像素透明"才看得见,而窗口交换链(`CreateSwapChainForHwnd`)不接受预乘 alpha。
-> 配了会在启动日志里明确提示。**想要半透明请用 `window_background_opacity`。**
+材质能透出来,前提是 `window_background_opacity < 1` 且走 GPU 后端(逐像素 alpha,见 13.6)。
 
-### 13.6 `window_background_opacity`:整窗半透明
+`"acrylic"` 没有直接用 DWM 的 `DWMSBT_TRANSIENTWINDOW`,因为那个材质**在窗口失焦时会被
+DWM 撤掉**——就是 wezterm 那个"点一下别处磨砂就没了"的毛病。实测窗口内有焦点时背景
+梯度能量 0.1(完全糊掉),失焦后变成 669.9(和窗外原始画面一样锐利)。改用作用在窗口
+自身合成上的 accent 模糊后磨砂一直在;系统不认这个接口时会退回 DWM Acrylic 并在日志里
+说明"失焦会失去磨砂"。
 
-实现方式是"层叠窗口 + 统一 alpha":DWM 把整块窗口按这个 alpha 合成,
-GDI 位图(CPU 后端)和 DXGI 画面(GPU 后端)都会跟着变淡,所以两个后端行为一致,
-不需要逐像素 alpha。
+### 13.6 `window_background_opacity`:背景半透明
 
-**注意它作用于整个窗口,包含文字** —— `0.85` 是"隐约透出背后的窗口",
-`0.3` 会让文字也跟着难读。**不写这项就是完全不透明(`1.0`)**,即使同时配了
-`win32_system_backdrop` 也不会自动变透明 —— 想让毛玻璃透出来必须自己把 `opacity`
-调低,而由于 13.5 说的交换链限制,目前即使调低也只会得到"整窗变淡"而不是真毛玻璃。
+两条后端语义不同:
 
-这些项都在**启动时**应用,改完要重启。
+| 后端 | 机制 | 效果 |
+|---|---|---|
+| `render = "gpu"` | DirectComposition 合成交换链 + 逐像素 alpha | **只有背景层变淡,文字保持实心** |
+| `render = "cpu"` | 层叠窗口 + 整窗 alpha | 文字跟着一起变淡 |
+
+GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无效)并把交换链挂在
+`IDCompositionVisual` 上,拿不到时自动退回整窗 alpha,日志里会写
+`背板 xxx:整窗 alpha(文字一起变淡)`。
+
+`0.85` 是"隐约透出背后的窗口",`0.3` 已经相当透。**不写这项就是完全不透明(`1.0`)**,
+即使配了 `win32_system_backdrop` 也不会自动变透明。
+
+### 13.7 `text_glow`:文字发光
+
+| 键 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `text_glow.enabled` | 布尔 | `false` | 总开关。**默认关**,要自己按喜好开 |
+| `text_glow.color` | 颜色 | 无 | 光晕颜色;不写 = 跟随前景色(反色/彩色文字各有各的光) |
+| `text_glow.intensity` | 数字 | `0.55` | 强度 0–1,夹到区间。过高小字号会糊 |
+| `text_glow.radius` | 数字 | `2.0` | 光晕半径(**逻辑像素**,按 DPI 缩放),夹到 0–16,`1~4` 比较克制 |
+
+```lua
+text_glow = {
+  enabled   = true,
+  color     = "#7AA2FF",
+  intensity = 0.55,
+  radius    = 1.5,
+}
+```
+
+实现方式是对每个字形多画 N 份偏移的低透明度"幽灵副本"(8 个方向 + 4 个内圈),
+不是真正的高斯模糊 —— 这样 CPU 后端和 GPU 后端走同一套绘制指令,观感完全一致,
+也不会因为模糊核而拖慢每帧。文字本体始终保持 alpha = 1,不会变糊。
+
+背景项(`window_background_*` / `win32_system_backdrop`)在**启动时**应用,改完要重启;
+`text_glow` 支持热重载(见第 18 节)。
 
 ---
 
@@ -2693,7 +2718,7 @@ keys = {
 | `window_decorations` + `integrated_title_*` 四件套 | 窗口装饰全套 |
 | `use_resize_increments` | 同名 |
 | `window_background_*` 一族 | 背景全套(`color` / `image` / `image_hsb` / `opacity` / `gradient`) |
-| `win32_system_backdrop` | 同名(只设 DWM 属性,见 13.5) |
+| `win32_system_backdrop` | 同名(见 13.5) |
 | `keys`(数组格式 + `wezterm.action.*`) | `keys` |
 | `exit_behavior` | 同名(`"Close"` / `"Hold"`) |
 
@@ -2737,6 +2762,7 @@ domain / 多路复用(SSH/mux)相关的配置。
 | 键位 | `keys`、`VectorTerm.*` 脚本 |
 | 主题 | `theme`(换主题或改覆盖项,保存**当前配置**就重新合并;主题里若带启动项仍要重启,见 [§2.5](#25-内置主题)) |
 | 行为 | `exit_behavior`、`quit_confirmation` |
+| 玻璃与发光 | `window_background_opacity`、`win32_system_backdrop`、`text_glow.*`(改完立刻重设 alpha 与材质,见 [§13.5](#135-win32_system_backdrop毛玻璃) / [§13.7](#137-text_glow文字发光)) |
 | 图片 | `images.enable` |
 
 ### 18.2 新开标签才生效
@@ -2753,7 +2779,7 @@ domain / 多路复用(SSH/mux)相关的配置。
 | 窗口 | `window_decorations`、`window_titlebar`、`window_rounded_corners`、`integrated_title_*` | 窗口创建时定 |
 | 几何 | `initial_cols`、`initial_rows`、`window_width`、`window_height` | 只影响建窗口那一次 |
 | 渲染 | `render`、`gpu_power` | 后端 / 显卡在启动时选定 |
-| 背景 | `window_background_*`、`win32_system_backdrop` | 图片与透明度在启动时应用 |
+| 背景 | `window_background_image`、`window_background_image_hsb`、`window_background_blur`、`window_background_fill`、`window_background_gradient`、`window_background_color` | 背景图在启动时解码 + 模糊 |
 | 图片 | `images.max_memory_mb` | 缓存容量在启动时建 |
 | 会话保持 | `session_persistence` | 启动时决定 shell 由本地 PTY 还是守护进程托管(见 [§4.8](#48-session_persistence会话保持wezterm-式多路复用)) |
 
@@ -3011,12 +3037,20 @@ return {
   -- },
   -- window_background_blur = 12,                       -- 0–200
   -- window_background_fill = "cover",                  -- cover|contain|stretch|tile|center
-  -- window_background_opacity = 0.92,                  -- 整窗(含文字)统一 alpha
+  -- window_background_opacity = 0.92,                  -- 背景层不透明度(文字不变淡)
   -- win32_system_backdrop = "none",                    -- none|mica|acrylic|tabbed
   -- window_background_gradient = {
   --   colors = { "#0b1020", "#1b2a4a" },
   --   orientation = "Vertical",                         -- 或 "Horizontal"
   -- },
+
+  -- ===================== 文字发光 =====================
+  text_glow = {
+    enabled   = false,                    -- 默认关,自己按喜好开
+    -- color  = "#7AA2FF",                -- 不写 = 跟随前景色
+    intensity = 0.55,                     -- 0–1
+    radius    = 2.0,                      -- 逻辑像素,1–4 比较克制
+  },
 
   -- ===================== 图片协议 =====================
   images = {
@@ -3076,7 +3110,7 @@ font = {
 window_background_image = "bg/wallpaper.jpg",
 window_background_image_hsb = { brightness = 0.45, saturation = 0.9 },
 window_background_blur = 10,
-window_background_opacity = 0.92,     -- 整窗含文字一起变淡,别低于 0.85
+window_background_opacity = 0.92,     -- 背景层半透明,文字保持实心(GPU 后端)
 colors = { background = "#101418" },
 ```
 
@@ -3163,7 +3197,7 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | 窗口装饰没变化 | 同上,窗口创建时定 | 重启程序 |
 | `window_background_image` 找不到图 | 相对路径是相对**配置文件**目录,不是 exe 目录 | 用绝对路径,或把图放到配置文件旁边 |
 | 只配了 `opacity` 但看不出透明 | 透明度作用于整窗,壁纸区域可能本来就和背后窗口同色 | 配合 `window_background_image` 或降低 `colors.background` 亮度 |
-| 配了 `win32_system_backdrop` 没效果 | 交换链给不出逐像素透明,材质透不出来(已知限制) | 改用 `window_background_opacity` |
+| 配了 `win32_system_backdrop` 没效果 | 要么走的是 CPU 后端(给不出逐像素 alpha),要么 `window_background_opacity` 还是 1 | 用 `render = "auto"`,并把 `opacity` 调低(见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
 | Nerd Font 图标显示成方块 | 私用区字形被 CJK 字体的占位字形抢了;或 `nerd_font = false` | 设 `nerd_font = "auto"` 或直接指定 Nerd Font 家族 |
 | 汉字之间有缝隙 / 汉字偏小 | 字体 asc-desc 远大于 1em,且没配回退 | 配 `fallback`,或换一个 em 接近 1.0 的中文字体 |
 | 标签栏第一个标签被圆角裁掉 | 无边框 + 圆角时留白被改成了 0 | 别把 `edge_padding` / `top_padding` 设 0,或删掉让它自动 |
@@ -3330,6 +3364,10 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | `window_background_opacity` | 无(不透明) |
 | `win32_system_backdrop` | `"none"` |
 | `window_background_gradient` | 无 |
+| `text_glow.enabled` | `false` |
+| `text_glow.color` | 无(跟随前景色) |
+| `text_glow.intensity` | `0.55` |
+| `text_glow.radius` | `2.0` |
 | `images.enable` | `true` |
 | `images.max_memory_mb` | `256` |
 | `keys` | 空(只用内置快捷键) |

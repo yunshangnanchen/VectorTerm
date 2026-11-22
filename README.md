@@ -65,7 +65,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 | 文件 | 风格 | 画布 | 强调色 | 活动标签 |
 |---|---|---|---|---|
 | [`config/deepseek.lua`](config/deepseek.lua) | DeepSeek 夜空蓝 | `#0B1220` | `#4D6BFE` 品牌蓝 | 蓝底白字 |
-| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 半透明磨砂 | 渐变 `#12203A`→`#0A1120`,80% 不透明 | `#5B7CFF` | 蓝底白字 |
+| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 毛玻璃 + 文字发光 | 真毛玻璃(accent 模糊 + 35% 背景) | `#5B7CFF` | 蓝底白字 |
 | [`config/chatgpt.lua`](config/chatgpt.lua) | ChatGPT 纯灰阶 | `#212121` | `#FFFFFF` | 白底黑字 |
 | [`config/claude.lua`](config/claude.lua) | Claude 黏土橙 | `#1F1E1D` | `#D97757` | 橙底深墨字 |
 | [`config/gemini.lua`](config/gemini.lua) | Gemini 蓝紫粉 | `#131314` | `#1A73E8` / `#8AB4F8` | 蓝底白字 |
@@ -74,11 +74,14 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 `git diff` / `ls` 还能分色);其余三套各有品牌色的分屏渐变与光标尾迹配色。
 
 `deepseek-glass` 是 deepseek 的"玻璃变体":尺寸、字号、标签栏、状态栏脚本逐项相同,
-多的是 `window_background_gradient`(上亮下暗的夜空蓝渐变)+ `window_background_opacity
-= 0.80`(桌面从背后透出 20%)+ 半透明品牌蓝选区。要更透就往下调,低于 0.7 文字会开始
-难读 —— 统一 alpha 是"整块窗口一起变淡",不是只有背景。**真正的 DWM 毛玻璃(Mica /
-Acrylic)当前拿不到**:材质要求客户区对 DWM 逐像素透明,而窗口交换链给不出
-`PREMULTIPLIED` alpha,详见 [自定义背景 §6](docs/custom-background.md)。
+多的是 `win32_system_backdrop = "Acrylic"`(真毛玻璃,**失焦不掉**)+
+`window_background_opacity = 0.35` + `text_glow`(文字外面一圈 `#7AA2FF` 柔光)。
+
+玻璃要 `render = "auto"`/`"gpu"`:逐像素 alpha 走 DirectComposition 合成交换链,只有背景层
+半透明、文字保持实心;退回 CPU 后端会变成整窗 alpha,文字跟着一起变淡。
+文字发光默认是**关**的(`text_glow.enabled = false`),半径/强度/颜色都可自己调,
+详见 [手册 §13.7](docs/config-manual.md#137-text_glow文字发光) 与
+[自定义背景 §5/§6](docs/custom-background.md)。
 
 **三种用法任选**:
 
@@ -111,7 +114,9 @@ Acrylic)当前拿不到**:材质要求客户区对 DWM 逐像素透明,而窗口
 - 按字形角色排版:powerline 铺满整格、制表符保线宽、PUA 图标等比缩进,不越界不压邻格
 - 半块与象限块(`▄▀█▌▐▖▗`)按格子几何直接填矩形,**上下行之间没有横缝**
 - 中英混排按 em 归一,汉字之间不留"空格缝";Nerd Font 图标自动发现并排在文本回退之前
-- 自定义背景:壁纸 / 模糊 / 渐变 / 五种填充 / 整窗半透明(配置项名对齐 wezterm)
+- 自定义背景:壁纸 / 模糊 / 渐变 / 五种填充 / 半透明(配置项名对齐 wezterm);GPU 后端逐像素 alpha,只有背景变淡
+- 毛玻璃:`win32_system_backdrop = "acrylic"` 是真磨砂,且**窗口失焦不掉**(wezterm 的已知毛病在这里修掉了)
+- 文字发光:`text_glow`,默认关,颜色 / 强度 / 半径自己设,热重载生效
 
 ### 交互
 
@@ -353,7 +358,7 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 | [docs/cursor-trail.md](docs/cursor-trail.md) | 尾迹动画算法:重定向不排队、积压加速、长度钳制;光标本体的自定义见手册 §10.5 |
 | [docs/rendering.md](docs/rendering.md) | 渲染后端机制、字形角色排版、图片协议 |
 | [docs/rendering-backends.md](docs/rendering-backends.md) · [docs/resize-fix-plan.md](docs/resize-fix-plan.md) · [docs/resize-render-rca.md](docs/resize-render-rca.md) | CPU/GPU 路径细节与拖动缩放抖动的完整排查 |
-| [docs/custom-background.md](docs/custom-background.md) | 壁纸 / 模糊 / 渐变 / 半透明的实现与边界 |
+| [docs/custom-background.md](docs/custom-background.md) | 壁纸 / 模糊 / 渐变 / 半透明 / 毛玻璃的实现与边界 |
 | [docs/layout.md](docs/layout.md) | **目录地图**:每个目录是什么、19 GB 的 `target/` 由哪些东西构成、想瘦身按什么顺序删;附 31 个 `src` 模块职责表 |
 | [docs/dependencies.md](docs/dependencies.md) · [docs/limitations.md](docs/limitations.md) | 依赖选型、已知限制 |
 | [docs/kitty-image-cursor-rca.md](docs/kitty-image-cursor-rca.md) | kitty 图片与 fastfetch 首行输入错位的完整定位(PTY 字节 / 上游源码 / 对照实验) |

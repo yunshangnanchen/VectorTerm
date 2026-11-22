@@ -281,6 +281,16 @@ pub fn map_vertex_format(format: wgt::VertexFormat) -> Dxgi::Common::DXGI_FORMAT
     }
 }
 
-pub fn map_acomposite_alpha_mode(_mode: wgt::CompositeAlphaMode) -> Dxgi::Common::DXGI_ALPHA_MODE {
-    Dxgi::Common::DXGI_ALPHA_MODE_IGNORE
+pub fn map_acomposite_alpha_mode(mode: wgt::CompositeAlphaMode) -> Dxgi::Common::DXGI_ALPHA_MODE {
+    // VectorTerm: 如实映射,但**只有 Composition 交换链**(CreateSwapChainForComposition)
+    // 接受 PREMULTIPLIED。`CreateSwapChainForHwnd` 对它一律返回 0x887A0001
+    // (DXGI_ERROR_INVALID_CALL),所以调用方必须先看 surface_capabilities 里
+    // 报了什么 alpha mode —— dx12/adapter.rs 现在按 target 类型区分。
+    match mode {
+        wgt::CompositeAlphaMode::PreMultiplied => Dxgi::Common::DXGI_ALPHA_MODE_PREMULTIPLIED,
+        wgt::CompositeAlphaMode::PostMultiplied | wgt::CompositeAlphaMode::Inherit => {
+            Dxgi::Common::DXGI_ALPHA_MODE_STRAIGHT
+        }
+        _ => Dxgi::Common::DXGI_ALPHA_MODE_IGNORE,
+    }
 }

@@ -152,6 +152,32 @@ fn lerp_rgb(a: Rgb, b: Rgb, t: f32) -> Rgb {
 }
 
 /// 按配置准备背景层。失败只打印原因并跳过该层,不影响终端启动。
+/// 从配置算出文字发光参数。
+///
+/// 强度摊到每个副本上:12 个幽灵副本彼此重叠,单个 alpha 约取总强度的 16%
+/// 时,叠出来的光晕亮度大约等于"总强度",再高小字号会糊。
+fn build_glow(cfg: &AppConfig, scale: f64) -> Option<crate::frame::Glow> {
+    let g = &cfg.text_glow;
+    if !g.enabled || g.intensity <= 0.0 || g.radius <= 0.0 {
+        return None;
+    }
+    let color = g
+        .color
+        .as_deref()
+        .and_then(crate::term::color_from_str)
+        .or_else(|| crate::term::color_from_str(&cfg.colors.foreground))
+        .unwrap_or(Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        });
+    Some(crate::frame::Glow {
+        color,
+        alpha: (g.intensity * 0.22).clamp(0.0, 1.0),
+        radius: (g.radius * scale as f32).max(0.5),
+    })
+}
+
 fn load_background(cfg: &AppConfig) -> Vec<crate::frame::BgLayer> {
     use crate::frame::BgLayer;
     use crate::images::DecodedImage;
@@ -946,6 +972,11 @@ pub struct Renderer {
     font_dirs: Vec<PathBuf>,
     em_px: f32,
     pub cell_w: f64,
+    /// 背景层透明度缩放。1.0 = 原样(不透明);逐像素 alpha 的毛玻璃路径下
+    /// 由 `window_background_opacity` 决定,让背景层自己半透明而不是靠整窗变淡。
+    bg_alpha_scale: f32,
+    /// 文字发光参数。`None` = 关闭(默认)。
+    glow: Option<crate::frame::Glow>,
     /// 主字体的自然字距(未取整)。状态栏按它排版,和 wezterm 的 shaper 一致。
     pub advance_w: f64,
     pub cell_h: f64,
@@ -983,6 +1014,19 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// 让背景层自己带透明度(逐像素 alpha 的毛玻璃路径)。
+    ///
+    /// 传 1.0 等于关闭。别在层叠窗口那条路上用:那条路已经对整窗做过
+    /// 一次 alpha,背景再乘一次会把壁纸衰减两遍。
+    pub fn set_background_alpha_scale(&mut self, scale: f32) {
+        self.bg_alpha_scale = scale.clamp(0.0, 1.0);
+    }
+
+    /// 热重载 `text_glow`。纯渲染参数,换一下就行,不用重建字形缓存。
+    pub fn set_text_glow(&mut self, cfg: &AppConfig, scale: f64) {
+        self.glow = build_glow(cfg, scale);
+    }
+
     pub fn new(cfg: &AppConfig, scale: f64) -> anyhow::Result<Self> {
         let em_px = cfg.fonts.size * scale as f32;
         let dirs = cfg.fonts.dirs.clone();
@@ -1103,6 +1147,8 @@ impl Renderer {
             emoji: crate::emoji::EmojiFont::load(crate::builtin_fonts::EMOJI_BYTES),
             emoji_cache: HashMap::new(),
             images_enabled: cfg.images.enabled,
+            bg_alpha_scale: 1.0,
+            glow: build_glow(cfg, scale),
             bg: load_background(cfg),
             bg_color: cfg
                 .background
@@ -1376,8 +1422,19 @@ impl Renderer {
         let clear = self.bg_color.unwrap_or(palette.bg);
         if begin {
             frame.begin(w, h, origin_y as f32, clear);
-            // 背景层(渐变在下、壁纸在上)交给两条后端自己画
-            frame.bg.extend(self.bg.iter().cloned());
+            frame.glow = self.glow;
+            // 背景层(渐变在下、壁纸在上)交给两条后端自己画。
+            // `bg_alpha_scale` 只在"逐像素 alpha"那条路上 < 1:背景层自己
+            // 带透明度,DWM 才能从窗口背后透出材质;其余路径是 1.0。
+            if self.bg_alpha_scale >= 0.999 {
+                frame.bg.extend(self.bg.iter().cloned());
+            } else {
+                frame.bg.extend(self.bg.iter().map(|l| {
+                    let mut l = l.clone();
+                    l.alpha *= self.bg_alpha_scale;
+                    l
+                }));
+            }
             // 标签栏在下方时,内容到它上沿为止;图片会越过网格,靠这个收边
             frame.clip_bottom = (h as f64 - self.content_bottom).max(0.0) as f32;
         }
@@ -1407,12 +1464,13 @@ impl Renderer {
                     //   看不出来但保证覆盖
                     // - 有壁纸/渐变/自定义纯色:必须让位,否则每格一个不透明
                     //   矩形会把整张背景盖死(清屏色已经铺满,不会露底)
-                    // 整窗不透明度由窗口层(层叠窗口统一 alpha)负责,
-                    // 这里不用再管 alpha。
+                    // 底色属于"背景层":逐像素 alpha 的毛玻璃路径下要跟着
+                    // 半透明,否则每格一个不透明矩形会把清屏的 alpha 整个盖掉
+                    // (表现就是"窗口完全不透")。其它路径下这个值是 1.0。
                     let default_bg = cell.bg == palette.bg;
                     let draw_bg = !default_bg || (self.bg.is_empty() && self.bg_color.is_none());
                     if draw_bg {
-                        frame.rect(cx, y, self.cell_w, self.cell_h, cell.bg, 1.0);
+                        frame.rect(cx, y, self.cell_w, self.cell_h, cell.bg, self.bg_alpha_scale);
                     }
                     if self.images_enabled {
                         for im in &cell.images {
@@ -1587,7 +1645,7 @@ impl Renderer {
         let bar_bg = crate::term::color_from_str(&draw.colors.background).unwrap_or(default_bg);
         // 背景铺满整条栏(含靠窗口边框那侧的留白),四角交给 DWM 裁圆;
         // 标签/按钮只画在 content 带里,四周留白才均匀。
-        frame.rect(0.0, bar.y, w as f64, bar.h, bar_bg, 1.0);
+        frame.rect(0.0, bar.y, w as f64, bar.h, bar_bg, self.bg_alpha_scale);
 
         let pad = (self.cell_w * 0.55).round().max(2.0);
         let baseline = content.y + (content.h - self.cell_h) / 2.0 + self.ascent;
@@ -2584,6 +2642,7 @@ impl Renderer {
                     color,
                     italic,
                     bold,
+                    alpha,
                 } => {
                     if let Some(g) = self.glyphs.get(*id as usize) {
                         blit_glyph(
@@ -2594,6 +2653,7 @@ impl Renderer {
                             *color,
                             *italic,
                             *bold,
+                            *alpha,
                         );
                     }
                 }
@@ -3038,7 +3098,11 @@ fn blit_glyph(
     color: Rgb,
     italic: bool,
     synthetic_bold: bool,
+    alpha: f32,
 ) {
+    if alpha <= 0.0 {
+        return;
+    }
     let (sx0, sy0, sw, sh) = src;
     if sw <= 0.5 || sh <= 0.5 || dst.2 <= 0.0 || dst.3 <= 0.0 {
         return;
@@ -3096,7 +3160,7 @@ fn blit_glyph(
                         (x0 + px as f64 + shear + pass as f64) as i32,
                         dy,
                         color,
-                        a as f32 / 255.0,
+                        a as f32 / 255.0 * alpha,
                     );
                 }
             }

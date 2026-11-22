@@ -15,6 +15,7 @@ use crate::render::Renderer;
 use anyhow::{anyhow, Context};
 use std::collections::HashMap;
 use std::sync::Arc;
+use winit::raw_window_handle::HasWindowHandle;
 use winit::window::Window;
 
 /// 图集尺寸(单通道,2048² 足够放几千个字形)
@@ -228,23 +229,33 @@ pub struct GpuRenderer {
     /// 离屏模式下的最后一帧(测试读回用)
     #[cfg_attr(not(test), allow(dead_code))]
     last_target: Option<wgpu::Texture>,
+    /// 走 DirectComposition 时持有它(逐像素 alpha 的毛玻璃路线)。
+    /// 不透明窗口 / 离屏渲染是 `None`。
+    #[cfg(windows)]
+    dcomp: Option<DcompTarget>,
+    /// 清屏用的 alpha(背景层不透明度)。1.0 = 不透明。
+    bg_alpha: f32,
 }
 
-/// 挂在窗口上的表面只能用 `Opaque`。
+/// 交换链的 alpha 模式。
 ///
-/// `CreateSwapChainForHwnd` 不接受 `PREMULTIPLIED` alpha:DXGI 直接返回
-/// `0x887A0001`,和 `Scaling`/`SwapEffect` 的组合无关(STRETCH/NONE ×
-/// FLIP_DISCARD/FLIP_SEQUENTIAL 四种都试过,全部失败)。
-/// 想要逐像素 alpha 得把交换链换成 `CreateSwapChainForComposition` 挂到
-/// DirectComposition 上;当前半透明是靠层叠窗口的统一 alpha 做的,
-/// 不需要交换链带 alpha(见 docs/custom-background.md)。
-fn pick_alpha_mode(caps: Option<&wgpu::SurfaceCapabilities>) -> wgpu::CompositeAlphaMode {
+/// `CreateSwapChainForHwnd` 不接受 `PREMULTIPLIED`:DXGI 直接返回
+/// `0x887A0001`(和 `Scaling`/`SwapEffect` 的组合无关,四种都试过)。
+/// 想要逐像素 alpha 只能换成 `CreateSwapChainForComposition`,把内容挂在
+/// DirectComposition 的 visual 上 —— `dx12/adapter.rs` 那条路才会在
+/// capabilities 里报 `PreMultiplied`。所以这里只看 caps 报了什么:
+/// 报了预乘就用(说明走的是合成交换链),否则退回不透明。
+fn pick_alpha_mode(
+    caps: Option<&wgpu::SurfaceCapabilities>,
+    want_transparent: bool,
+) -> wgpu::CompositeAlphaMode {
     let Some(c) = caps else {
         return wgpu::CompositeAlphaMode::Auto;
     };
-    if c.alpha_modes
-        .contains(&wgpu::CompositeAlphaMode::Opaque)
-    {
+    if want_transparent && c.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        return wgpu::CompositeAlphaMode::PreMultiplied;
+    }
+    if c.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
         return wgpu::CompositeAlphaMode::Opaque;
     }
     c.alpha_modes
@@ -252,6 +263,68 @@ fn pick_alpha_mode(caps: Option<&wgpu::SurfaceCapabilities>) -> wgpu::CompositeA
         .copied()
         .unwrap_or(wgpu::CompositeAlphaMode::Auto)
 }
+
+/// DirectComposition 的三件套:`CreateSwapChainForComposition` 出来的画面
+/// 必须挂在 `IDCompositionVisual` 上才会被 DWM 合成。
+///
+/// 字段全是 `_` 前缀 —— 它们的存在本身就是"别提前 drop":visual 上挂着
+/// 交换链的内容,target 上挂着 visual,device 上挂着 target。
+#[cfg(windows)]
+struct DcompTarget {
+    _device: windows::Win32::Graphics::DirectComposition::IDCompositionDevice,
+    _target: windows::Win32::Graphics::DirectComposition::IDCompositionTarget,
+    visual: windows::Win32::Graphics::DirectComposition::IDCompositionVisual,
+}
+
+#[cfg(windows)]
+impl DcompTarget {
+    /// 给窗口挂一套 DComp:device → target(绑 hwnd) → visual → SetRoot → Commit。
+    ///
+    /// 同时把窗口标成 `WS_EX_NOREDIRECTIONBITMAP`。不加这个的话 DWM 会照常给
+    /// 窗口分一块空白重定向位图,盖在合成内容上面 —— 表现就是"窗口在、内容是灰的"。
+    fn attach(window: &Window) -> anyhow::Result<Self> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Graphics::DirectComposition::{
+            DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+        };
+
+        let hwnd = match window.window_handle()?.as_raw() {
+            winit::raw_window_handle::RawWindowHandle::Win32(h) => h.hwnd.get(),
+            _ => return Err(anyhow!("不是 Win32 窗口,无法挂 DirectComposition")),
+        };
+        unsafe {
+            let hwnd = HWND(hwnd as _);
+            let device: IDCompositionDevice = DCompositionCreateDevice(None)
+                .context("DCompositionCreateDevice 失败(需要 Win8+)")?;
+            let target: IDCompositionTarget = device
+                .CreateTargetForHwnd(hwnd, true)
+                .context("IDCompositionDevice::CreateTargetForHwnd 失败")?;
+            let visual: IDCompositionVisual = device.CreateVisual().context("CreateVisual 失败")?;
+            target.SetRoot(&visual).context("IDCompositionTarget::SetRoot 失败")?;
+
+            // 注意:WS_EX_NOREDIRECTIONBITMAP 必须由创建窗口的那一方在
+            // CreateWindowEx 时给(winit 的 `with_no_redirection_bitmap`),
+            // 这里再改 ex-style 是无效的 —— DWM 早就决定好有没有重定向位图了。
+            device.Commit().context("IDCompositionDevice::Commit 失败")?;
+
+            Ok(Self {
+                _device: device,
+                _target: target,
+                visual,
+            })
+        }
+    }
+
+    fn visual_ptr(&self) -> *mut std::ffi::c_void {
+        use windows::core::Interface;
+        self.visual.as_raw()
+    }
+
+    fn commit(&self) {
+        let _ = unsafe { self._device.Commit() };
+    }
+}
+
 
 const SHADER: &str = r#"
 struct Globals {
@@ -518,13 +591,26 @@ fn rank_adapters(
 impl GpuRenderer {
     /// `prefer_discrete`:双显卡机器上是否优先独显(配置里的 `gpu_power = "high"`)
     pub fn new(window: Arc<Window>, prefer_discrete: bool) -> anyhow::Result<Self> {
-        Self::build(Some(window), 0, 0, prefer_discrete)
+        Self::build(Some(window), 0, 0, prefer_discrete, false)
+    }
+
+    /// 逐像素透明版本:交换链挂到 DirectComposition 上,清屏 alpha 由
+    /// [`GpuRenderer::set_background_alpha`] 控制。
+    ///
+    /// 失败时**不要**退回这条路的半成品:调用方应该拿错误去走 CPU 后端
+    /// (那条路还能用层叠窗口的统一 alpha)。因为这里可能已经把窗口标成
+    /// `WS_EX_NOREDIRECTIONBITMAP`,失败了要把窗口还原 —— 见 `Drop`。
+    pub fn new_transparent(
+        window: Arc<Window>,
+        prefer_discrete: bool,
+    ) -> anyhow::Result<Self> {
+        Self::build(Some(window), 0, 0, prefer_discrete, true)
     }
 
     /// 无窗口构造:测试用,渲染到离屏纹理再读回
     #[cfg(test)]
     pub fn new_offscreen(width: u32, height: u32) -> anyhow::Result<Self> {
-        Self::build(None, width, height, false)
+        Self::build(None, width, height, false, false)
     }
 
     fn build(
@@ -532,7 +618,17 @@ impl GpuRenderer {
         off_w: u32,
         off_h: u32,
         prefer_discrete: bool,
+        transparent: bool,
     ) -> anyhow::Result<Self> {
+        // 透明路线先把窗口改成"无重定向位图",交换链才有地方展示。
+        // 只在真的要逐像素 alpha 时才做 —— 普通窗口加了它会让 softbuffer
+        // 之类的 GDI 路径画不出东西。
+        #[cfg(windows)]
+        let dcomp = match (&window, transparent) {
+            (Some(w), true) => Some(DcompTarget::attach(w)?),
+            _ => None,
+        };
+
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: BACKENDS,
             ..Default::default()
@@ -580,13 +676,34 @@ impl GpuRenderer {
             };
             // 设备拿到了,这时候才碰窗口
             let surface = match &window {
-                Some(w) => match instance.create_surface(w.clone()) {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        errors.push(format!("{label}: 创建交换链失败 {e}"));
-                        continue;
+                Some(w) => {
+                    // 有 DComp 就把内容挂到 visual 上(合成交换链,能给逐像素 alpha);
+                    // 没有就走原来的 hwnd 交换链。
+                    let created = {
+                        #[cfg(windows)]
+                        {
+                            match &dcomp {
+                                Some(d) => unsafe {
+                                    instance.create_surface_unsafe(
+                                        wgpu::SurfaceTargetUnsafe::CompositionVisual(d.visual_ptr()),
+                                    )
+                                },
+                                None => instance.create_surface(w.clone()),
+                            }
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            instance.create_surface(w.clone())
+                        }
+                    };
+                    match created {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            errors.push(format!("{label}: 创建交换链失败 {e}"));
+                            continue;
+                        }
                     }
-                },
+                }
                 None => None,
             };
             if let Some(s) = &surface {
@@ -651,7 +768,7 @@ impl GpuRenderer {
             width: w,
             height: h,
             present_mode,
-            alpha_mode: pick_alpha_mode(caps.as_ref()),
+            alpha_mode: pick_alpha_mode(caps.as_ref(), transparent),
             view_formats: vec![],
             // 拖动缩放时每跨一格都要重建交换链。ResizeBuffers 会等上一帧
             // 真正显示出去,队列越深等得越久。
@@ -926,11 +1043,35 @@ impl GpuRenderer {
             sampler,
             adapter_name,
             last_target: None,
+            #[cfg(windows)]
+            dcomp,
+            bg_alpha: 1.0,
         })
     }
 
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    /// 背景层不透明度(逐像素 alpha 的清屏值)。1.0 = 不透明。
+    ///
+    /// 只影响清屏和背景层:字形、光标、状态栏这些前景实例自己的 alpha 是
+    /// 1,所以窗口透出来了而文字依然实心 —— 这正是层叠窗口统一 alpha 做不到的。
+    pub fn set_background_alpha(&mut self, alpha: f32) {
+        self.bg_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    /// 当前是否真的走合成交换链(逐像素 alpha 可用)。
+    pub fn is_transparent_surface(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.dcomp.is_some()
+                && self.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -1329,6 +1470,7 @@ impl GpuRenderer {
                     dst,
                     color,
                     italic,
+                    alpha,
                     ..
                 } => {
                     let Some(Some(slot)) = self.slots.get(id) else {
@@ -1350,7 +1492,7 @@ impl GpuRenderer {
                                 color.r as f32 / 255.0,
                                 color.g as f32 / 255.0,
                                 color.b as f32 / 255.0,
-                                1.0,
+                                *alpha,
                             ],
                             params: [shear, 0.0],
                             extra: [0.0, 0.0],
@@ -1496,19 +1638,20 @@ impl GpuRenderer {
             });
         {
             let c = frame.clear;
+            // 逐像素透明时清屏要写预乘色:颜色乘 alpha,alpha 单独给。
+            // 不透明窗口下 bg_alpha 恒为 1,乘了也不变。
+            let a = self.bg_alpha.clamp(0.0, 1.0) as f64;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("VectorTerm"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // 交换链是 Opaque:清屏 alpha 恒为 1。半透明由层叠窗口的
-                        // 统一 alpha 在合成阶段完成,这里预乘反而会把背景压暗。
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: c.r as f64 / 255.0,
-                            g: c.g as f64 / 255.0,
-                            b: c.b as f64 / 255.0,
-                            a: 1.0,
+                            r: c.r as f64 / 255.0 * a,
+                            g: c.g as f64 / 255.0 * a,
+                            b: c.b as f64 / 255.0 * a,
+                            a,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -1577,6 +1720,11 @@ impl GpuRenderer {
         self.queue.submit([encoder.finish()]);
         if let Some(t) = frame_tex {
             t.present();
+        }
+        // 合成交换链:Present 只更新内容,DComp 收到 Commit 才会把它交给 DWM
+        #[cfg(windows)]
+        if let Some(d) = &self.dcomp {
+            d.commit();
         }
         self.gc_images();
         Ok(())

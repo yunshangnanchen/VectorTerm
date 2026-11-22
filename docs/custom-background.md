@@ -11,9 +11,9 @@
 | `window_background_image_hsb` | `{ brightness, hue, saturation }` | 三个乘数，`1.0` = 原样 |
 | `window_background_blur` | 0~200 | 模糊半径（图片像素），`8~24` 是磨砂感 |
 | `window_background_fill` | `cover` / `contain` / `stretch` / `tile` / `center` | 填充方式，默认 `cover` |
-| `window_background_opacity` | 0~1 | 整窗不透明度，默认 1，见第 5 节 |
+| `window_background_opacity` | 0~1 | 背景层不透明度，默认 1，见第 5 节 |
 | `window_background_gradient` | `{ colors = {a,b}, orientation }` | 两色渐变，画在图片下面 |
-| `win32_system_backdrop` | `none` / `mica` / `acrylic` / `tabbed` | **只解析不生效**，见第 6 节 |
+| `win32_system_backdrop` | `none` / `mica` / `acrylic` / `tabbed` | 系统背板材质，`acrylic` 即毛玻璃，见第 6 节 |
 
 支持格式：png / jpg / webp / bmp / gif（动图取首帧）。超过 2560px 的长边会先等比降采样再模糊——背景最终是被缩放到窗口的，再大的像素也用不上。
 
@@ -81,51 +81,64 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
 
 ## 5. 半透明是怎么做的
 
-用的是**层叠窗口 + 统一 alpha**（`WS_EX_LAYERED` + `SetLayeredWindowAttributes(LWA_ALPHA)`），DWM 在合成阶段把整块窗口按这个 alpha 叠到桌面上：
+两条后端不一样：
 
-| 能力 | CPU 后端 | GPU 后端 |
+| 后端 | 机制 | 透明度语义 |
 |---|---|---|
-| 纯色 / 壁纸 / 渐变 / 模糊 / 填充 | ✅ | ✅ |
-| 半透明（透出背后的窗口） | ✅ | ✅ |
+| `render = "gpu"` | `CreateSwapChainForComposition` + DirectComposition visual + `WS_EX_NOREDIRECTIONBITMAP` | **逐像素 alpha**：只有背景层变淡，字形和光标保持实心 |
+| `render = "cpu"` | `WS_EX_LAYERED` + `SetLayeredWindowAttributes(LWA_ALPHA)` | **整窗 alpha**：文字跟着一起变淡 |
 
-两个后端行为一致，因为变淡发生在合成阶段，和下面画的是 GDI 位图还是 DXGI 画面无关。
+### 5.1 GPU:逐像素 alpha
 
-**代价：文字也会一起变淡。** 这是统一 alpha 的语义，`opacity = 0.8` 表示「整块窗口 80% 不透明」，不是「只有背景 80% 不透明」。想要「背景半透明、文字全不透明」需要逐像素 alpha，见第 6 节。
+`CreateSwapChainForHwnd` 不接受 `DXGI_ALPHA_MODE_PREMULTIPLIED`（返回 `0x887A0001`），
+所以 GPU 后端的窗口表面改成"合成交换链"：
 
-为什么不用逐像素 alpha（试过的路）：
+1. 窗口创建时带 `WS_EX_NOREDIRECTIONBITMAP`（**必须创建时给**，事后 `SetWindowLongW` 无效，
+   会给出一块纯灰画面）；
+2. 用 `IDCompositionDevice` → `IDCompositionTarget` → `IDCompositionVisual`，
+   `SetRoot` 到窗口，`CreateSwapChainForComposition` 出的交换链挂在这个 visual 上；
+3. wgpu 侧走 `SurfaceTargetUnsafe::CompositionVisual(ptr)`，
+   此时 `surface_capabilities` 才会如实报出 `PreMultiplied`；
+4. 每帧 `Present` 之后补一次 `IDCompositionDevice::Commit`。
 
-1. **GPU 交换链**：`CreateSwapChainForHwnd` 不接受 `DXGI_ALPHA_MODE_PREMULTIPLIED`，DXGI 直接返回 `0x887A0001`（`DXGI_ERROR_INVALID_CALL`）。四种组合都试过——`Scaling` 的 `STRETCH`/`NONE` × `SwapEffect` 的 `FLIP_DISCARD`/`FLIP_SEQUENTIAL`——全部失败；把窗口的透明属性去掉也一样失败。所以**不是驱动限制，也不是参数搭配问题**，是 hwnd 交换链本身不支持。
-2. **CPU 位图**：softbuffer 走 GDI `BitBlt` 贴到窗口 DC，这条路径根本没有 alpha 通道。
+绘制时对 alpha 的处理：
 
-真要逐像素，唯一的路是把交换链换成 `CreateSwapChainForComposition`，挂到 DirectComposition 的 visual 上，同时窗口要加 `WS_EX_NOREDIRECTIONBITMAP`。这条路会连带影响窗口阴影、圆角、以及现在的 `WM_SIZING` 预配置逻辑，所以没有动。
+- 清屏色和背景层（壁纸 / 纯色 / 渐变）的 alpha 乘 `opacity`；
+- 单元格底色矩形和标签栏底色也乘同一个系数（漏掉任何一个，整块窗口就又不透了——
+  这是实现时踩到的第一个坑）；
+- 字形、光标、选中框 alpha 恒为 1，所以"背景半透明、文字实心"。
 
-## 6. 毛玻璃（mica / acrylic）当前不生效
+`render = "auto"` 会优先走 GPU；拿不到合成交换链时退回整窗 alpha，并在日志里退化成
+`[VectorTerm] 背板 xxx:整窗 alpha(文字一起变淡)`,观感会明显差一档。
 
-`win32_system_backdrop` 会被解析，也会真的去调 `DwmExtendFrameIntoClientArea` + `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)`，但**看不到材质**：材质是 DWM 画在窗口背后、需要客户区对 DWM 逐像素透明才能露出来，而上面第 5 节说了当前给不出逐像素透明。启动日志会明确提示：
+## 6. 毛玻璃
 
-```text
-[VectorTerm] win32_system_backdrop = "acrylic" 只设了 DWM 属性,材质透不出来:窗口交换链给不出逐像素透明
-```
+`win32_system_backdrop` 现在**真的能看到材质**了，前提是逐像素 alpha 已经通（见 5.1）：
+材质由系统画在窗口背后，客户区必须对 DWM 透明才能露出来。
 
-之所以保留解析：wezterm 的配置能整段搬过来不至于报错。想要半透明效果请用 `window_background_opacity`。
+| 取值 | 实现 | 失焦后 |
+|---|---|---|
+| `"none"` | 无材质 | —— |
+| `"acrylic"` | `SetWindowCompositionAttribute` + `ACCENT_ENABLE_BLURBEHIND`（高斯模糊，不带着色，着色交给自己的逐像素 alpha） | **磨砂保持** |
+| `"mica"` / `"tabbed"` | `DWMWA_SYSTEMBACKDROP_TYPE`（壁纸着色，本来就不做磨砂） | 系统按材质规则变化 |
 
-### 6.1 另外两条路也试过了（都无效，别再试）
+### 6.1 为什么 acrylic 不直接用 DWM 的
 
-除了 DWM 的 backdrop 属性，还实测过 Windows 上的两个"老牌做法"，两者的返回都成功、
-画面却**一个像素都没变**（前后两次屏幕截图逐字节相同）：
+因为 wezterm 那个"一点别处磨砂就没了"的毛病，根源就在 DWM 材质本身：
+`DWMSBT_TRANSIENTWINDOW` 在窗口**失焦时会被 DWM 撤掉**。
 
-| 试法 | 结果 |
-|---|---|
-| `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)` + `ACCENT_ENABLE_ACRYLICBLURBEHIND` | 对 `WS_EX_LAYERED` + `LWA_ALPHA` 的半透明窗口不生效 —— DWM 不对层叠窗口应用材质 |
-| 同上，`ACCENT_ENABLE_BLURBEHIND`（Win10 经典模糊） | 同样不生效 |
-| `LWA_COLORKEY`（把底色 `#010203` 设成透明色）替代 `LWA_ALPHA` | 交换链输出的像素颜色经 GPU/DWM 合成后与键值对不上，背景依旧不透明；而且颜色键与统一 alpha 互斥 |
+实测（`tools/diagnostics/glass_metric.py`，背景放高频棋盘格，测窗口内一块空白区的
+"梯度能量"——棋盘清晰时约 660，糊掉时约 0）：
 
-结论不变：**想要"背景模糊"必须换合成表面**（`CreateSwapChainForComposition` + DirectComposition），
-属于渲染层改动，配置层做不到。现有的"磨砂"只能来自 `window_background_blur`（模糊的是
-窗外自己那张图，不是窗后的桌面/窗口）。
+| 状态 | 窗口内梯度能量 | 观感 |
+|---|---|---|
+| 有焦点 | 0.1 | 完全磨砂 |
+| 失焦 | 669.9 | 磨砂消失，只剩清晰的透视 |
 
-复现脚本：`tools/diagnostics/acrylic_probe.py`（层叠窗口 + accent）、
-`tools/diagnostics/acrylic_key_probe.py`（颜色键 + accent）。
+accent 模糊是作用在窗口自身合成上的，与激活状态无关，所以换成它之后磨砂一直在。
+万一系统不认这个接口，会退回 DWM Acrylic 并打日志说明"失焦会失去磨砂"。
+
+复现脚本：`tools/diagnostics/glass_metric.py <tag> <none|acrylic|mica> <opacity> [位置] [win|back]`。
 
 ## 7. 代价
 
@@ -136,6 +149,9 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
 
 ## 8. 已知限制
 
-- 单元格里显式设了背景色的内容（选中块、反显、`ls` 的目录底色）保持不透明，不受 `opacity` 以外的背景层影响，否则会糊成一片。
-- 层叠窗口下不要再去调 `SetLayeredWindowAttributes` 的第二个参数（色键），否则会和统一 alpha 打架。
-- 毛玻璃材质需要 DirectComposition 合成表面，见第 5 / 6 节。
+- 单元格里显式设了背景色的内容（选中块、反显、`ls` 的目录底色）也乘 `opacity`，
+  叠在玻璃上会略深，这是有意的。
+- CPU 后端下不要再去调 `SetLayeredWindowAttributes` 的第二个参数（色键），会和统一 alpha 打架。
+- 合成交换链（`WS_EX_NOREDIRECTIONBITMAP`）的窗口没有系统画的非客户区，圆角/阴影完全依赖
+  DWM 自身策略；窗口拖动缩放时旧帧会被 DXGI 拉伸一段（GPU 后端固有行为）。
+

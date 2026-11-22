@@ -1,39 +1,39 @@
 --[====================================================================[
-  VectorTerm 内置主题:DeepSeek Glass(夜空蓝 · 半透明磨砂)
+  VectorTerm 内置主题:DeepSeek Glass(夜空蓝 · 真毛玻璃)
 
   尺寸、排版、状态栏脚本全部沿用 deepseek.lua —— 窗口还是 1250×750、
   14 号字、行高 1.0、padding 10、顶部标签栏,换过来尺寸一个字都不会变。
-  变的只有"玻璃感"这三层:
+  变的只有"玻璃"这三层:
 
-    1) 底色层  window_background_gradient 深空蓝渐变,取代单一实色,
-              上半部分略亮,像玻璃上沿的一道反光;
-    2) 整窗透明 window_background_opacity = 0.80,桌面从背后透出来 20%;
-    3) 配色   前景提到 #F2F6FF、选区改成半透明品牌蓝 —— 因为统一 alpha
-              会把文字一起变淡,不往上提一档会发灰。
+    1) 材质    win32_system_backdrop = "Acrylic":DWM 在窗口**背后**画
+              Acrylic 材质,背后的一切先被糊掉再透上来;
+    2) 逐像素透明 window_background_opacity = 0.35,只压**背景层** ——
+              底色和每格单元格背景 35% 不透明,文字/光标/标签栏仍是实心;
+    3) 配色    前景提到 #F2F6FF、选区改成半透明品牌蓝;
+              再加一层克制的文字发光(text_glow),玻璃底上更好看。
 
-  ── 关于"毛玻璃"要说清楚 ───────────────────────────────────────────
-  Win11 的 Mica / Acrylic 走的是 DWM 在窗口**背后**画材质,要求客户区对
-  DWM 逐像素透明。本项目的交换链是 CreateSwapChainForHwnd,不接受
-  PREMULTIPLIED alpha,softbuffer 走的 GDI BitBlt 也没有 alpha 通道,
-  所以 win32_system_backdrop 设了也透不出来(启动日志会明说)。
-  本文件因此**不设** win32_system_backdrop —— 设了只是多一条警告。
+  ── 为什么这次能真透 ────────────────────────────────────────────────
+  以前不行:窗口交换链是 `CreateSwapChainForHwnd`,DXGI 不接受
+  PREMULTIPLIED alpha(返回 0x887A0001),而 GDI 的 BitBlt 也没有 alpha
+  通道,所以材质设了也透不出来。
 
-  能拿到的"毛玻璃"是:窗内渐变 + 整窗半透明(透出桌面但不模糊)。
-  真想要模糊,只有换 DirectComposition 合成表面这条路,属于渲染层改动,
-  配置层做不到。想要"磨砂纹理"的话,用现成的壁纸通道自己糊一张:
+  现在渲染层换成了 **DirectComposition 合成交换链**
+  (`CreateSwapChainForComposition` + `IDCompositionVisual`),交换链本身带
+  预乘 alpha:清屏和背景层按 opacity 输出,DWM 就能把材质垫在背后透出来。
+  这需要 GPU 后端(`render = "gpu"` 或 `"auto"`);CPU 软渲染会退回
+  "整窗统一 alpha"的老路(文字跟着变淡,也不模糊)。
 
-      window_background_image = "C:/path/to/wallpaper.jpg"
-      window_background_blur  = 18          -- 8~24 是磨砂感
-      window_background_image_hsb = { brightness = 0.5, saturation = 0.8 }
+  ── 失焦之后 ────────────────────────────────────────────────────────
+  Win10 的 Acrylic 在窗口失去焦点时会被系统降级成纯色(wezterm 那个
+  "失焦毛玻璃就没了"就是它)。本项目在每次 Focused 事件里重设一次材质,
+  失焦/回来都重新要一次,所以焦点切来切去不会掉。
 
-  注意相对路径按**配置文件所在目录**解析:这份预设被「设为当前配置」复制到
-  %USERPROFILE%\.config\VectorTerm\current\ 之后,相对路径会失效,
-  要么写绝对路径,要么把图片一起拷过去。
-
-  ── 怎么用 ──────────────────────────────────────────────────────────
-  1) 配置管理器左栏选中本文件 → 右键「设为当前配置」;
-  2) 临时试:VectorTerm.exe --config "<程序目录>\config\deepseek-glass.lua"
-  3) 当底表:theme = "deepseek-glass",再覆盖少量键。
+  ── 想要更夸张的效果 ────────────────────────────────────────────────
+  - 更透:opacity 调到 0.20~0.25;再低文字和背景的分界就糊了。
+  - 更亮的光晕:text_glow.radius / intensity 往上加;
+    也可以换色,比如 color = "#7AA2FF" 或 "#FF6B9D"。
+  - 不想发光:把 text_glow.enabled 设成 false 即可。
+  - 不想要模糊、只想透:win32_system_backdrop = "none"。
 
   每一项的含义见 docs/config-manual.md,透明度的完整说明见
   docs/custom-background.md。
@@ -124,10 +124,22 @@ return {
     colors = { "#12203A", "#0A1120" },
     orientation = "Vertical",
   },
-  -- 整窗 80% 不透明:桌面透出 20%。0.75~0.85 是甜区 —— 再往下调,
-  -- 桌面颜色会盖过文字;低于 0.7 基本没法读(统一 alpha 是"整块窗口变淡",
-  -- 不是只有背景)。
-  window_background_opacity = 0.80,
+  -- 背景层 35% 不透明:背后的 Acrylic 材质透出 65%。
+  -- 注意这是"只压背景"的语义 —— 逐像素 alpha 下文字仍然实心,
+  -- 所以 0.2~0.4 都能读(旧的整窗 alpha 才需要 0.75 以上)。
+  window_background_opacity = 0.35,
+  -- DWM 材质:Acrylic(实时模糊窗口后方)。Mica 只采壁纸、更省电;
+  -- tabbed 是 Win11 标签页材质。
+  win32_system_backdrop = "Acrylic",
+
+  -- 文字发光:玻璃底上文字容易"陷进去",一圈同色系柔光能把它托起来。
+  -- 关掉就写 enabled = false。
+  text_glow = {
+    enabled   = true,
+    color     = "#7AA2FF",  -- 留空(nil)= 跟随每种文字自己的颜色
+    intensity = 0.55,       -- 0~1,越大越亮
+    radius    = 1.5,        -- 逻辑像素,1~4 比较克制
+  },
 
   -- ── 基础配色(§6.1):DARK 色板,前景按透明度提亮 ──────────────────
   colors = {
@@ -249,7 +261,8 @@ return {
   -- ── 常用运行项 ────────────────────────────────────────────────────
   shell = "",
   shell_args = { "-NoLogo" },
-  render = "cpu",
+  -- 毛玻璃要 GPU(合成交换链);没有 GPU 的机器会自动退回软渲染
+  render = "auto",
 
   keys_file = "keys.lua",
   padding = 10,

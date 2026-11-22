@@ -828,7 +828,19 @@ impl crate::Adapter for super::Adapter {
                 | crate::TextureUses::COPY_SRC
                 | crate::TextureUses::COPY_DST,
             present_modes,
-            composite_alpha_modes: vec![wgt::CompositeAlphaMode::Opaque],
+            // VectorTerm: 只有 Composition 目标能带逐像素 alpha。
+            // hwnd 交换链只收 DXGI_ALPHA_MODE_IGNORE,报 PreMultiplied 会让
+            // configure 阶段直接失败(0x887A0001)。Visual/SurfaceHandle/
+            // SwapChainPanel 走 CreateSwapChainForComposition,支持预乘。
+            composite_alpha_modes: match surface.target {
+                SurfaceTarget::WndHandle(_) => vec![wgt::CompositeAlphaMode::Opaque],
+                SurfaceTarget::Visual(_)
+                | SurfaceTarget::SurfaceHandle(_)
+                | SurfaceTarget::SwapChainPanel(_) => vec![
+                    wgt::CompositeAlphaMode::PreMultiplied,
+                    wgt::CompositeAlphaMode::Opaque,
+                ],
+            },
         })
     }
 

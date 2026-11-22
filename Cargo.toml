@@ -86,6 +86,22 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Power",
 ] }
 
+# DirectComposition:毛玻璃要的不是"整窗半透明",而是交换链输出逐像素 alpha,
+# 让 DWM 把材质垫在窗口后面。`CreateSwapChainForHwnd` 不收 PREMULTIPLIED
+# (见 vendor/wgpu-hal/PATCH.md),只能改走 `CreateSwapChainForComposition`,
+# 它要求内容挂在一个 IDCompositionVisual 上 —— 这些 COM 接口 windows-sys
+# 没有绑定,所以单独引 `windows` crate(只开这几个 feature)。
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Controls",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 # 测试里要拼 iTerm2 / Kitty 协议报文
 base64 = "0.21"

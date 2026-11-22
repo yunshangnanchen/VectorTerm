@@ -10,7 +10,7 @@
 - 历史搜索只扫**活动 pane** 的回看缓冲(备用屏没有历史);查询是字面量,不支持正则;匹配数超过 `search.max_matches` 会截断,高亮是叠在文字上的半透明色块而不是给字形重着色
 - 斜体/粗体优先使用字体的 Italic/Bold face;字体没有对应 face 时才合成(**粗体向右重描一遍、斜体剪切位图**)
 - 闪烁按 xterm 的 530ms 相位节流重绘,只在相位翻转时出帧
-- **半透明只用整窗 alpha**:`window_background_opacity` 是层叠窗口的统一 alpha,文字会跟着一起变淡;`win32_system_backdrop`(mica/acrylic)只解析不生效——材质的透出需要客户区对 DWM 逐像素透明,而 `CreateSwapChainForHwnd` 不接受预乘 alpha(`0x887A0001`,与 `Scaling`/`SwapEffect` 组合无关),CPU 的 GDI `BitBlt` 也没有 alpha 通道。详见 [`custom-background.md`](custom-background.md) 第 5、6 节
+- **半透明分两条路**:`render = "gpu"` 走 DirectComposition 合成交换链,有逐像素 alpha(背景层变淡、文字实心);`render = "cpu"` 只能层叠窗口 + 统一 alpha,文字会跟着一起变淡。`win32_system_backdrop = "acrylic"` 的磨砂靠 accent 模糊(失焦不掉),但**只在这条逐像素 alpha 通路上才看得见**;DWM 的 `DWMSBT_TRANSIENTWINDOW` 材质失焦会被系统撤掉,所以没有采用。详见 [`custom-background.md`](custom-background.md) 第 5、6 节
 - 没有 HarfBuzz 整形:不支持连字(ligature)、复杂脚本的上下文变形;Nerd Font 图标是单个码点,不受影响
 - `nerd_font = "auto"` 在**第一次遇到缺字**时才扫描字体目录(约 100~200ms,一次性),避免每次启动都扫;扫描后缓存到进程内
 - 非 Mono 的 Nerd Font(`Propo`/比例宽度变体)图标可能对不齐单元格,建议用 `... Nerd Font Mono`

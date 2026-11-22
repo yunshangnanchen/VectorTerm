@@ -964,6 +964,13 @@ impl ApplicationHandler<UserEvent> for App {
                     state.window.set_ime_allowed(true);
                     state.ime_area = None;
                 }
+                // 失焦重设材质。
+                //
+                // Win10 的 Acrylic(`ACCENT_ENABLE_ACRYLICBLURBEHIND`)在窗口
+                // 失去焦点时会被系统降级成纯色 —— 这是 DWM 自己的行为,wezterm
+                // 那个"失焦毛玻璃就没了"就是这个。Win11 的 DWMSBT 不降级,但
+                // 重新设一次没有副作用(幂等),两边用同一条路兜住。
+                state.refresh_backdrop();
                 for p in state.all_panes_mut() {
                     p.term.lock().focus_changed(focused);
                 }
@@ -1558,26 +1565,120 @@ impl Drop for Backend {
     }
 }
 
-/// Win11 的系统背板材质(Mica / Acrylic / Tabbed)。
+/// 经典 accent 模糊(`SetWindowCompositionAttribute`,未公开 API)。
 ///
-/// 目前只做 DWM 侧的属性设置,实际看不到材质:材质要靠"窗口客户区对 DWM 透明"
-/// 才能透出来,而挂在窗口上的交换链(`CreateSwapChainForHwnd`)不接受
-/// `PREMULTIPLIED` alpha,给不出逐像素透明(见 docs/custom-background.md)。
+/// 为什么不用 Win11 的 DWM 材质:实测 `DWMSBT_TRANSIENTWINDOW`(Acrylic)在窗口
+/// **失焦时会被 DWM 直接撤掉**——有焦点时窗口内梯度能量 0.1(完全糊掉),失焦后
+/// 变成 669.9(跟窗外原始棋盘格一样锐利),也就是 wezterm 那个"一点别处磨砂就没了"
+/// 的毛病。accent 模糊是作用在窗口自身合成上的,不受激活状态影响,所以磨砂能一直保持。
+#[cfg(windows)]
+mod accent_blur {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        gradient_color: u32,
+        animation_id: u32,
+    }
+
+    #[repr(C)]
+    struct WindowCompositionAttribData {
+        attrib: u32,
+        data: *mut c_void,
+        size: usize,
+    }
+
+    const WCA_ACCENT_POLICY: u32 = 19;
+    /// 关闭
+    pub const ACCENT_DISABLED: u32 = 0;
+    /// 高斯模糊,不带着色(着色交给我们自己的逐像素 alpha 去做)
+    pub const ACCENT_BLURBEHIND: u32 = 3;
+
+    /// `SetWindowCompositionAttribute` 没有导出 lib(未公开 API),只能运行时解析。
+    fn resolve() -> Option<unsafe extern "system" fn(isize, *mut WindowCompositionAttribData) -> i32> {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        unsafe {
+            let module = GetModuleHandleA(c"user32.dll".as_ptr() as *const u8);
+            if module.is_null() {
+                return None;
+            }
+            let f = GetProcAddress(module, c"SetWindowCompositionAttribute".as_ptr() as *const u8)?;
+            std::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                unsafe extern "system" fn(isize, *mut WindowCompositionAttribData) -> i32,
+            >(f)
+            .into()
+        }
+    }
+
+    /// 返回 false 表示系统不认(极老版本或被策略禁用),调用方应退回 DWM 材质。
+    pub fn apply(hwnd: isize, state: u32, gradient_color: u32) -> bool {
+        let Some(f) = resolve() else { return false };
+        let mut policy = AccentPolicy {
+            state,
+            flags: if gradient_color == 0 { 0 } else { 2 }, // 2 = 启用渐变色
+            gradient_color,
+            animation_id: 0,
+        };
+        let mut data = WindowCompositionAttribData {
+            attrib: WCA_ACCENT_POLICY,
+            data: &mut policy as *mut AccentPolicy as *mut c_void,
+            size: std::mem::size_of::<AccentPolicy>(),
+        };
+        unsafe { f(hwnd, &mut data) != 0 }
+    }
+}
+
+/// Win11 的系统背板材质(Mica / Acrylic / Tabbed)+ 经典 accent 模糊。
+///
+/// 两条通路:
+/// * `Mica` / `Tabbed` —— DWM 材质。它们是"壁纸着色",本来就不做磨砂,失焦时的
+///   变化也能接受,直接用官方接口最省事。
+/// * `Acrylic` —— accent 模糊。要的就是磨砂,而 DWM 的 Acrylic 失焦会掉,所以
+///   走 classic blur;失败时(老系统)再退回 DWM Acrylic。
+///
+/// 材质能透出来的前提是客户区对 DWM 透明,这靠 `render = "gpu"` 走
+/// DirectComposition 合成交换链 + 逐像素 alpha(见 src/gpu.rs)。
 #[cfg(windows)]
 fn apply_system_backdrop(hwnd: isize, kind: config::Backdrop) {
     use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute};
     use windows_sys::Win32::UI::Controls::MARGINS;
     // win32metadata 里 DWMWA_SYSTEMBACKDROP_TYPE = 38
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
+    const DWMSBT_NONE: i32 = 1;
     const DWMSBT_MAINWINDOW: i32 = 2; // Mica
     const DWMSBT_TRANSIENTWINDOW: i32 = 3; // Acrylic
     const DWMSBT_TABBEDWINDOW: i32 = 4;
 
+    unsafe fn set_dwm(hwnd: isize, v: i32) -> i32 {
+        DwmSetWindowAttribute(
+            hwnd as _,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &v as *const i32 as *const _,
+            std::mem::size_of::<i32>() as u32,
+        )
+    }
+
     let v = match kind {
-        config::Backdrop::None => return,
+        config::Backdrop::None => {
+            let _ = unsafe { set_dwm(hwnd, DWMSBT_NONE) };
+            accent_blur::apply(hwnd, accent_blur::ACCENT_DISABLED, 0);
+            return;
+        }
         config::Backdrop::Mica => DWMSBT_MAINWINDOW,
-        config::Backdrop::Acrylic => DWMSBT_TRANSIENTWINDOW,
         config::Backdrop::Tabbed => DWMSBT_TABBEDWINDOW,
+        config::Backdrop::Acrylic => {
+            // 先确保 DWM 材质是关的,免得两套机制叠在一起糊两次
+            let _ = unsafe { set_dwm(hwnd, DWMSBT_NONE) };
+            if accent_blur::apply(hwnd, accent_blur::ACCENT_BLURBEHIND, 0) {
+                crate::wlog!("[VectorTerm] 背板 acrylic:accent 模糊(失焦不掉)");
+                return;
+            }
+            crate::wlog!("[VectorTerm] accent 模糊不可用,退回 DWM Acrylic(失焦会失去磨砂)");
+            DWMSBT_TRANSIENTWINDOW
+        }
     };
     unsafe {
         // 把窗口四周扩展成"玻璃区",DWM 才会在窗口背后画材质
@@ -1588,12 +1689,7 @@ fn apply_system_backdrop(hwnd: isize, kind: config::Backdrop) {
             cyBottomHeight: -1,
         };
         let _ = DwmExtendFrameIntoClientArea(hwnd as _, &margins);
-        let hr = DwmSetWindowAttribute(
-            hwnd as _,
-            DWMWA_SYSTEMBACKDROP_TYPE,
-            &v as *const i32 as *const _,
-            std::mem::size_of::<i32>() as u32,
-        );
+        let hr = set_dwm(hwnd, v);
         if hr != 0 {
             crate::wlog!(
                 "[VectorTerm] 系统背板({})设置失败 HRESULT 0x{hr:08x} —— 需要 Win11 22H2 及以上",
@@ -1674,13 +1770,94 @@ fn set_uniform_alpha(hwnd: isize, alpha: u8) {
         }
     }
 }
+/// 把"半透明 / 毛玻璃"落到窗口上。
+///
+/// 两条路,优先级从高到低:
+///
+/// 1. **GPU + DirectComposition**(`Backend::Gpu` 且交换链带 `PreMultiplied`
+///    alpha):渲染层直接写逐像素 alpha —— 清屏和背景层按 `opacity` 输出,
+///    字形/光标这些前景实例 alpha 恒为 1。于是背景透、文字实,DWM 的材质
+///    就能从窗口背后透出来。这是 wezterm 那类"真毛玻璃"的做法。
+/// 2. **层叠窗口统一 alpha**(`WS_EX_LAYERED` + `LWA_ALPHA`):CPU 软渲染或
+///    交换链拿不到 alpha 时的兜底。整块窗口一起变淡,文字也跟着发灰。
+///
+/// 材质本身(`win32_system_backdrop`)两条路都要设:它画在窗口**后面**,
+/// 只要客户区有透明像素就能透出来。
+#[cfg(windows)]
+fn apply_window_glass(window: &Window, cfg: &AppConfig, backend: &mut Backend) -> bool {
+    let Some(hwnd) = hwnd_of(window) else {
+        return false;
+    };
+    let opacity = cfg.background.effective_opacity();
+
+    let mut per_pixel = false;
+    if let Backend::Gpu(g, _) = backend {
+        if g.is_transparent_surface() {
+            g.set_background_alpha(opacity);
+            per_pixel = true;
+        }
+    }
+    if !per_pixel && cfg.background.needs_transparent_window() {
+        let alpha = (opacity * 255.0).round() as u8;
+        set_uniform_alpha(hwnd, alpha);
+    } else if per_pixel {
+        // 之前可能因为切换配置加过 WS_EX_LAYERED,留着会和合成内容打架
+        clear_uniform_alpha(hwnd);
+    }
+
+    if cfg.background.backdrop != config::Backdrop::None {
+        apply_system_backdrop(hwnd, cfg.background.backdrop);
+        crate::wlog!(
+            "[VectorTerm] 背板 {}:{}(逐像素 alpha)",
+            cfg.background.backdrop.as_str(),
+            if per_pixel { "渲染层合成" } else { "整窗 alpha,背景不透" }
+        );
+    }
+    per_pixel
+}
+
+#[cfg(not(windows))]
+fn apply_window_glass(_window: &Window, _cfg: &AppConfig, _backend: &mut Backend) -> bool {
+    false
+}
+
+/// 摘掉 `WS_EX_LAYERED`。从"整窗 alpha"切到"逐像素 alpha"时要把这个位清掉:
+/// 层叠窗口会让 DWM 走另一条合成路径,合成交换链的内容反而看不见。
+#[cfg(windows)]
+fn clear_uniform_alpha(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_LAYERED,
+    };
+    unsafe {
+        let ex = GetWindowLongW(hwnd as _, GWL_EXSTYLE);
+        if ex & WS_EX_LAYERED as i32 == 0 {
+            return;
+        }
+        SetWindowLongW(hwnd as _, GWL_EXSTYLE, ex & !(WS_EX_LAYERED as i32));
+        SetWindowPos(
+            hwnd as _,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 impl Backend {
     fn new(cfg: &AppConfig, window: Arc<Window>) -> anyhow::Result<Self> {
         let prefer_discrete = cfg.gpu_power == config::GpuPower::High;
+        // 要半透明时 GPU 后端优先走 DirectComposition 合成交换链:只有那条
+        // 路能给逐像素 alpha(背景透、文字实)。拿不到就退回普通交换链,
+        // 由 `apply_window_glass` 用层叠窗口的统一 alpha 兜底。
+        let glass = cfg.background.needs_transparent_window();
         match cfg.render {
             config::RenderMode::Cpu => Self::cpu(window),
             config::RenderMode::Gpu => {
-                match Self::gpu(window.clone(), prefer_discrete) {
+                match Self::gpu(window.clone(), prefer_discrete, glass) {
                     Ok(g) => Ok(g),
                     Err(e) => {
                         // 终端起不来比"没 GPU 加速"糟糕得多,这里退回软渲染并说明原因
@@ -1689,7 +1866,7 @@ impl Backend {
                     }
                 }
             }
-            config::RenderMode::Auto => match Self::gpu(window.clone(), prefer_discrete) {
+            config::RenderMode::Auto => match Self::gpu(window.clone(), prefer_discrete, glass) {
                 Ok(g) => Ok(g),
                 Err(e) => {
                     crate::wlog!("[VectorTerm] 未找到可用的 GPU({e:#}),使用 CPU 软渲染");
@@ -1700,8 +1877,27 @@ impl Backend {
     }
 
     /// 建 GPU 后端并挂上 `WM_SIZING` 钩子。
-    fn gpu(window: Arc<Window>, prefer_discrete: bool) -> anyhow::Result<Self> {
-        let g = gpu::GpuRenderer::new(window.clone(), prefer_discrete)?;
+    fn gpu(
+        window: Arc<Window>,
+        prefer_discrete: bool,
+        transparent: bool,
+    ) -> anyhow::Result<Self> {
+        let g = if transparent {
+            match gpu::GpuRenderer::new_transparent(window.clone(), prefer_discrete) {
+                Ok(g) => {
+                    crate::wlog!("[VectorTerm] 交换链走 DirectComposition:逐像素 alpha 可用");
+                    g
+                }
+                Err(e) => {
+                    crate::wlog!(
+                        "[VectorTerm] 合成交换链不可用({e:#}),退回普通交换链 + 整窗 alpha"
+                    );
+                    gpu::GpuRenderer::new(window.clone(), prefer_discrete)?
+                }
+            }
+        } else {
+            gpu::GpuRenderer::new(window.clone(), prefer_discrete)?
+        };
         crate::wlog!(
             "[VectorTerm] 渲染后端:GPU({}) —— 拖动缩放窗口时旧帧会被 DXGI 拉伸, \
              想避免请改用 render = \"cpu\"(见 docs/rendering-backends.md)",
@@ -3982,6 +4178,13 @@ impl GuiState {
                 CornerPreference::Round
             };
             attrs = attrs.with_corner_preference(pref);
+            // 要走逐像素 alpha(毛玻璃)就必须在**创建窗口时**声明"没有重定向位图":
+            // DWM 在窗口创建那一刻决定要不要给它分一块 redirection surface,
+            // 之后再 SetWindowLong 改 ex-style 是不生效的 —— 表现就是交换链的
+            // alpha 被整块盖掉,窗口看起来完全不透明。
+            if cfg.background.needs_transparent_window() {
+                attrs = attrs.with_no_redirection_bitmap(true);
+            }
         }
         let window = Arc::new(el.create_window(attrs)?);
         // 打开输入法。winit 默认把窗口的 IME 上下文摘掉
@@ -3990,40 +4193,8 @@ impl GuiState {
         window.set_ime_allowed(true);
         // 诊断入口见 `winhook::force_ime_open`;真正的调用点在 `about_to_wait`
         // (要反复调,窗口拿焦点时 winit 会把输入上下文重建一遍)。
-        // 半透明:层叠窗口 + 统一 alpha。DWM 按这个 alpha 合成整块窗口,
-        // GDI 位图(CPU 后端)和 DXGI 画面(GPU 后端)都会跟着变淡,
-        // 所以两个后端行为一致,不需要逐像素 alpha。
-        #[cfg(windows)]
-        if cfg.background.needs_transparent_window() {
-            if let Some(h) = hwnd_of(&window) {
-                let alpha = (cfg.background.effective_opacity() * 255.0).round() as u8;
-                set_uniform_alpha(h, alpha);
-            }
-        }
-        // Win11 毛玻璃背板:必须在窗口建好之后设,DWM 才会在窗口后方画材质
-        if cfg.background.backdrop != config::Backdrop::None {
-            #[cfg(windows)]
-            {
-                let applied = if let Ok(winit::raw_window_handle::RawWindowHandle::Win32(h)) =
-                    window.window_handle().map(|h| h.as_raw())
-                {
-                    apply_system_backdrop(h.hwnd.get(), cfg.background.backdrop);
-                    true
-                } else {
-                    false
-                };
-                if applied {
-                    crate::wlog!(
-                        "[VectorTerm] win32_system_backdrop = \"{}\" 只设了 DWM 属性,材质透不出来:\
-                         窗口交换链给不出逐像素透明(见 docs/custom-background.md)。\
-                         想要半透明请用 window_background_opacity",
-                        cfg.background.backdrop.as_str()
-                    );
-                }
-            }
-            #[cfg(not(windows))]
-            crate::wlog!("[VectorTerm] win32_system_backdrop 只在 Windows 上有效,已忽略");
-        }
+        // 半透明 / 毛玻璃要等后端建好才能决定走哪条路(合成交换链还是
+        // 层叠窗口),见 `apply_window_glass`。
         let own_resize_border = cfg.window.own_resize_border();
 
         let scale = window.scale_factor();
@@ -4134,7 +4305,12 @@ impl GuiState {
             tab_bar_total_height(&metrics, inner.height as f64, top_inset, show_bar)
         );
 
-        let backend = Backend::new(&cfg, window.clone())?;
+        let mut backend = Backend::new(&cfg, window.clone())?;
+        // 逐像素 alpha 时背景层要自己带透明度 —— 否则整块底色仍是不透明的,
+        // 材质透不出来。整窗 alpha 那条路保持 1.0,免得衰减两遍。
+        if apply_window_glass(&window, &cfg, &mut backend) {
+            renderer.set_background_alpha_scale(cfg.background.effective_opacity());
+        }
         // ---- 第一个标签 ----
         let mut next_tab_id = 1;
         let tab = if cfg.session_persistence {
@@ -5304,6 +5480,21 @@ impl GuiState {
             .flatten()
             .flat_map(|t| t.panes.iter_mut())
             .find(|p| p.id == id)
+    }
+
+    /// 重新向 DWM 要一次材质。窗口失焦/重新聚焦、热重载改了 `backdrop`
+    /// 之后都走这里 —— 系统会在失焦时把 Win10 的 Acrylic 降级成纯色,
+    /// 重设一次就能恢复。
+    fn refresh_backdrop(&mut self) {
+        #[cfg(windows)]
+        {
+            if self.cfg.background.backdrop == config::Backdrop::None {
+                return;
+            }
+            if let Some(h) = hwnd_of(&self.window) {
+                apply_system_backdrop(h, self.cfg.background.backdrop);
+            }
+        }
     }
 
     /// 遍历所有 pane(活动标签 + 后台标签)。
@@ -8555,6 +8746,16 @@ impl GuiState {
                 p.term.lock().set_config(term::make_config(&self.cfg));
             }
         }
+        // 文字发光:纯渲染参数
+        self.renderer.set_text_glow(&self.cfg, self.window.scale_factor());
+        // 半透明 / 材质:改了立刻重设。`window_background_opacity` 和
+        // `win32_system_backdrop` 都是运行时就能换的。
+        let per_pixel = apply_window_glass(&self.window, &self.cfg, &mut self.backend);
+        self.renderer.set_background_alpha_scale(if per_pixel {
+            self.cfg.background.effective_opacity()
+        } else {
+            1.0
+        });
         // 标签栏开关/位置变了,内容区高度跟着变
         self.relayout();
         // 状态栏的内容(固定文字 / 模块)可能也改了,立刻重算一次,不用等下一个 tick

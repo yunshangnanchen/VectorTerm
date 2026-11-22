@@ -616,6 +616,33 @@ impl PathQuote {
     }
 }
 
+/// 文字发光。
+///
+/// 渲染层对每个字形额外画一圈偏移的"幽灵副本"(见 [`crate::frame::Glow`]),
+/// 视觉上是一层柔光。默认关闭 —— 它会让画面明显变亮,深色背景 + 细字时尤其
+/// 挑眼,所以交给用户自己按喜好开。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextGlowConfig {
+    pub enabled: bool,
+    /// 光晕颜色。`None` = 跟随前景色(反色/彩色文字会有各自的光)。
+    pub color: Option<String>,
+    /// 总强度 0..=1。越大越亮,但过高会让小字号糊成一团。
+    pub intensity: f32,
+    /// 光晕半径,**逻辑像素**(会按 DPI 缩放)。1~4 之间比较克制。
+    pub radius: f32,
+}
+
+impl Default for TextGlowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: None,
+            intensity: 0.55,
+            radius: 2.0,
+        }
+    }
+}
+
 /// 把资源管理器里的文件 / 文件夹直接拖到终端窗口上,就把它**绝对路径**
 /// 写进光标所在的位置(相当于替你敲了一遍路径)。
 ///
@@ -1349,6 +1376,8 @@ pub struct AppConfig {
     pub files_gui: FilesGuiConfig,
     /// 拖入文件 / 文件夹时插入绝对路径。见 [`DragDropConfig`]。
     pub drag_drop: DragDropConfig,
+    /// 文字发光(字形外面一圈柔光)。见 [`TextGlowConfig`]。
+    pub text_glow: TextGlowConfig,
     /// 关闭窗口时,如果某个标签里还有程序在跑(不只是 shell 本身),
     /// 先弹一个确认框。默认开,对应 wezterm 的"关闭前确认"行为。
     pub quit_confirmation: bool,
@@ -1412,6 +1441,7 @@ impl Default for AppConfig {
             pane_focus: PaneFocusConfig::default(),
             files_gui: FilesGuiConfig::default(),
             drag_drop: DragDropConfig::default(),
+            text_glow: TextGlowConfig::default(),
             quit_confirmation: true,
             exit_behavior: ExitBehavior::Close,
             session_persistence: false,
@@ -1922,6 +1952,7 @@ fn parse_table(tbl: &mlua::Table) -> Result<AppConfig, String> {
     parse_pane_focus(&tbl, &mut cfg.pane_focus);
     parse_files_gui(&tbl, &mut cfg.files_gui);
     parse_drag_drop(&tbl, &mut cfg.drag_drop);
+    parse_text_glow(&tbl, &mut cfg.text_glow);
     parse_fonts(&tbl, &mut cfg.fonts);
     // ---- 会话结束行为 / 关窗确认 ----
     // exit_behavior = "Close"(默认) | "Hold",wezterm 同名项
@@ -2791,7 +2822,28 @@ fn parse_files_gui(tbl: &mlua::Table, f: &mut FilesGuiConfig) {
     }
 }
 
-/// `drag_drop = { ... }`:拖文件 / 文件夹进窗口时插入绝对路径。
+/// `text_glow = { enabled, color, intensity, radius }`:字形外面一圈柔光。
+fn parse_text_glow(tbl: &mlua::Table, g: &mut TextGlowConfig) {
+    let Ok(Some(t)) = tbl.get::<Option<mlua::Table>>("text_glow") else {
+        return;
+    };
+    for (key, slot) in [("enabled", &mut g.enabled)] {
+        if let Ok(Some(v)) = t.get::<Option<bool>>(key) {
+            *slot = v;
+        }
+    }
+    if let Ok(Some(v)) = t.get::<Option<String>>("color") {
+        g.color = Some(v);
+    }
+    if let Ok(Some(v)) = t.get::<Option<f64>>("intensity") {
+        g.intensity = (v as f32).clamp(0.0, 1.0);
+    }
+    if let Ok(Some(v)) = t.get::<Option<f64>>("radius") {
+        g.radius = (v as f32).clamp(0.0, 16.0);
+    }
+}
+
+/// `drag_drop = { enabled, quote }`:拖文件 / 文件夹进窗口时插入绝对路径。
 fn parse_drag_drop(tbl: &mlua::Table, d: &mut DragDropConfig) {
     let Ok(Some(t)) = tbl.get::<Option<mlua::Table>>("drag_drop") else {
         return;
@@ -4632,5 +4684,37 @@ mod tests {
         accents.dedup();
         assert_eq!(backgrounds.len(), 4, "四套主题的底色不能重复");
         assert_eq!(accents.len(), 4, "四套主题的强调色不能重复");
+    }
+
+    /// `text_glow` 是"交给用户自己开"的效果:默认必须关,越界的数值要夹紧,
+    /// 只写一个字段时其余字段不能被清成 0。
+    #[test]
+    fn text_glow_defaults_off_and_clamps() {
+        let plain = parse_with_theme("return {}", Path::new("inline.lua")).unwrap();
+        assert!(!plain.text_glow.enabled, "默认不该开光晕");
+        assert_eq!(plain.text_glow.color, None, "默认跟随前景色");
+        assert!((plain.text_glow.intensity - 0.55).abs() < 1e-6);
+        assert!((plain.text_glow.radius - 2.0).abs() < 1e-6);
+
+        let loud = parse_with_theme(
+            r##"return { text_glow = { enabled = true, color = "#7AA2FF", intensity = 5, radius = 99 } }"##,
+            Path::new("inline.lua"),
+        )
+        .unwrap();
+        assert!(loud.text_glow.enabled);
+        assert_eq!(loud.text_glow.color.as_deref(), Some("#7AA2FF"));
+        assert!((loud.text_glow.intensity - 1.0).abs() < 1e-6, "强度要夹到 0..=1");
+        assert!((loud.text_glow.radius - 16.0).abs() < 1e-6, "半径要夹到 0..=16");
+
+        let only_toggle = parse_with_theme(
+            "return { text_glow = { enabled = true } }",
+            Path::new("inline.lua"),
+        )
+        .unwrap();
+        assert!(only_toggle.text_glow.enabled);
+        assert!(
+            (only_toggle.text_glow.intensity - 0.55).abs() < 1e-6,
+            "没写的字段应保留默认值"
+        );
     }
 }
