@@ -152,32 +152,6 @@ fn lerp_rgb(a: Rgb, b: Rgb, t: f32) -> Rgb {
 }
 
 /// 按配置准备背景层。失败只打印原因并跳过该层,不影响终端启动。
-/// 从配置算出文字发光参数。
-///
-/// 强度摊到每个副本上:12 个幽灵副本彼此重叠,单个 alpha 约取总强度的 16%
-/// 时,叠出来的光晕亮度大约等于"总强度",再高小字号会糊。
-fn build_glow(cfg: &AppConfig, scale: f64) -> Option<crate::frame::Glow> {
-    let g = &cfg.text_glow;
-    if !g.enabled || g.intensity <= 0.0 || g.radius <= 0.0 {
-        return None;
-    }
-    let color = g
-        .color
-        .as_deref()
-        .and_then(crate::term::color_from_str)
-        .or_else(|| crate::term::color_from_str(&cfg.colors.foreground))
-        .unwrap_or(Rgb {
-            r: 255,
-            g: 255,
-            b: 255,
-        });
-    Some(crate::frame::Glow {
-        color,
-        alpha: (g.intensity * 0.22).clamp(0.0, 1.0),
-        radius: (g.radius * scale as f32).max(0.5),
-    })
-}
-
 fn load_background(cfg: &AppConfig) -> Vec<crate::frame::BgLayer> {
     use crate::frame::BgLayer;
     use crate::images::DecodedImage;
@@ -975,8 +949,6 @@ pub struct Renderer {
     /// 背景层透明度缩放。1.0 = 原样(不透明);逐像素 alpha 的毛玻璃路径下
     /// 由 `window_background_opacity` 决定,让背景层自己半透明而不是靠整窗变淡。
     bg_alpha_scale: f32,
-    /// 文字发光参数。`None` = 关闭(默认)。
-    glow: Option<crate::frame::Glow>,
     /// 主字体的自然字距(未取整)。状态栏按它排版,和 wezterm 的 shaper 一致。
     pub advance_w: f64,
     pub cell_h: f64,
@@ -1020,11 +992,6 @@ impl Renderer {
     /// 一次 alpha,背景再乘一次会把壁纸衰减两遍。
     pub fn set_background_alpha_scale(&mut self, scale: f32) {
         self.bg_alpha_scale = scale.clamp(0.0, 1.0);
-    }
-
-    /// 热重载 `text_glow`。纯渲染参数,换一下就行,不用重建字形缓存。
-    pub fn set_text_glow(&mut self, cfg: &AppConfig, scale: f64) {
-        self.glow = build_glow(cfg, scale);
     }
 
     pub fn new(cfg: &AppConfig, scale: f64) -> anyhow::Result<Self> {
@@ -1148,7 +1115,6 @@ impl Renderer {
             emoji_cache: HashMap::new(),
             images_enabled: cfg.images.enabled,
             bg_alpha_scale: 1.0,
-            glow: build_glow(cfg, scale),
             bg: load_background(cfg),
             bg_color: cfg
                 .background
@@ -1422,7 +1388,6 @@ impl Renderer {
         let clear = self.bg_color.unwrap_or(palette.bg);
         if begin {
             frame.begin(w, h, origin_y as f32, clear);
-            frame.glow = self.glow;
             // 背景层(渐变在下、壁纸在上)交给两条后端自己画。
             // `bg_alpha_scale` 只在"逐像素 alpha"那条路上 < 1:背景层自己
             // 带透明度,DWM 才能从窗口背后透出材质;其余路径是 1.0。
@@ -2642,7 +2607,6 @@ impl Renderer {
                     color,
                     italic,
                     bold,
-                    alpha,
                 } => {
                     if let Some(g) = self.glyphs.get(*id as usize) {
                         blit_glyph(
@@ -2653,7 +2617,6 @@ impl Renderer {
                             *color,
                             *italic,
                             *bold,
-                            *alpha,
                         );
                     }
                 }
@@ -3098,11 +3061,7 @@ fn blit_glyph(
     color: Rgb,
     italic: bool,
     synthetic_bold: bool,
-    alpha: f32,
 ) {
-    if alpha <= 0.0 {
-        return;
-    }
     let (sx0, sy0, sw, sh) = src;
     if sw <= 0.5 || sh <= 0.5 || dst.2 <= 0.0 || dst.3 <= 0.0 {
         return;
@@ -3160,7 +3119,7 @@ fn blit_glyph(
                         (x0 + px as f64 + shear + pass as f64) as i32,
                         dy,
                         color,
-                        a as f32 / 255.0 * alpha,
+                        a as f32 / 255.0,
                     );
                 }
             }

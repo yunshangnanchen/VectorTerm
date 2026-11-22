@@ -1485,7 +1485,6 @@ impl GpuRenderer {
                     dst,
                     color,
                     italic,
-                    alpha,
                     ..
                 } => {
                     let Some(Some(slot)) = self.slots.get(id) else {
@@ -1507,7 +1506,7 @@ impl GpuRenderer {
                                 color.r as f32 / 255.0,
                                 color.g as f32 / 255.0,
                                 color.b as f32 / 255.0,
-                                *alpha,
+                                1.0,
                             ],
                             params: [shear, 0.0],
                             extra: [0.0, 0.0],

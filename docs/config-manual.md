@@ -307,13 +307,12 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 #### 半透明磨砂变体:`deepseek-glass.lua`
 
 `deepseek` 的玻璃版,**尺寸逐项相同**(1250×750、14 号字、行高 1.0、padding 10、
-顶部标签栏、同一段状态栏脚本),换过去窗口不会变大变小。差别只有四处:
+顶部标签栏、同一段状态栏脚本),换过去窗口不会变大变小。差别只有三处:
 
 | 键 | 值 | 作用 |
 |---|---|---|
 | `window_background_opacity` | `0.35` | 背景层 35% 不透明,桌面从背后透出 |
 | `win32_system_backdrop` | `"Acrylic"` | 真毛玻璃(accent 模糊,失焦不掉,见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
-| `text_glow` | `{ enabled = true, color = "#7AA2FF", intensity = 0.55, radius = 1.5 }` | 文字外面一圈蓝色柔光(见 [§13.7](#137-text_glow文字发光)) |
 | `selection.opacity` | `0.30` | 选区是半透明品牌蓝 |
 
 > **必须走 GPU 后端。** 背景半透明 + 文字实心靠的是逐像素 alpha
@@ -1929,30 +1928,7 @@ GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无�
 `0.85` 是"隐约透出背后的窗口",`0.3` 已经相当透。**不写这项就是完全不透明(`1.0`)**,
 即使配了 `win32_system_backdrop` 也不会自动变透明。
 
-### 13.7 `text_glow`:文字发光
-
-| 键 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `text_glow.enabled` | 布尔 | `false` | 总开关。**默认关**,要自己按喜好开 |
-| `text_glow.color` | 颜色 | 无 | 光晕颜色;不写 = 跟随前景色(反色/彩色文字各有各的光) |
-| `text_glow.intensity` | 数字 | `0.55` | 强度 0–1,夹到区间。过高小字号会糊 |
-| `text_glow.radius` | 数字 | `2.0` | 光晕半径(**逻辑像素**,按 DPI 缩放),夹到 0–16,`1~4` 比较克制 |
-
-```lua
-text_glow = {
-  enabled   = true,
-  color     = "#7AA2FF",
-  intensity = 0.55,
-  radius    = 1.5,
-}
-```
-
-实现方式是对每个字形多画 N 份偏移的低透明度"幽灵副本"(8 个方向 + 4 个内圈),
-不是真正的高斯模糊 —— 这样 CPU 后端和 GPU 后端走同一套绘制指令,观感完全一致,
-也不会因为模糊核而拖慢每帧。文字本体始终保持 alpha = 1,不会变糊。
-
-背景项(`window_background_*` / `win32_system_backdrop`)在**启动时**应用,改完要重启;
-`text_glow` 支持热重载(见第 18 节)。
+背景项(`window_background_*` / `win32_system_backdrop`)支持热重载,见第 18 节。
 
 ---
 
@@ -2770,7 +2746,7 @@ domain / 多路复用(SSH/mux)相关的配置。
 | 键位 | `keys`、`VectorTerm.*` 脚本 |
 | 主题 | `theme`(换主题或改覆盖项,保存**当前配置**就重新合并;主题里若带启动项仍要重启,见 [§2.5](#25-内置主题)) |
 | 行为 | `exit_behavior`、`quit_confirmation` |
-| 玻璃与发光 | `window_background_opacity`、`win32_system_backdrop`、`text_glow.*`(改完立刻重设 alpha 与材质,见 [§13.5](#135-win32_system_backdrop毛玻璃) / [§13.7](#137-text_glow文字发光)) |
+| 玻璃 | `window_background_opacity`、`win32_system_backdrop`(改完立刻重设 alpha 与材质,见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
 | 图片 | `images.enable` |
 
 ### 18.2 新开标签才生效
@@ -3051,14 +3027,6 @@ return {
   --   colors = { "#0b1020", "#1b2a4a" },
   --   orientation = "Vertical",                         -- 或 "Horizontal"
   -- },
-
-  -- ===================== 文字发光 =====================
-  text_glow = {
-    enabled   = false,                    -- 默认关,自己按喜好开
-    -- color  = "#7AA2FF",                -- 不写 = 跟随前景色
-    intensity = 0.55,                     -- 0–1
-    radius    = 2.0,                      -- 逻辑像素,1–4 比较克制
-  },
 
   -- ===================== 图片协议 =====================
   images = {
@@ -3372,10 +3340,6 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | `window_background_opacity` | 无(不透明) |
 | `win32_system_backdrop` | `"none"` |
 | `window_background_gradient` | 无 |
-| `text_glow.enabled` | `false` |
-| `text_glow.color` | 无(跟随前景色) |
-| `text_glow.intensity` | `0.55` |
-| `text_glow.radius` | `2.0` |
 | `images.enable` | `true` |
 | `images.max_memory_mb` | `256` |
 | `keys` | 空(只用内置快捷键) |

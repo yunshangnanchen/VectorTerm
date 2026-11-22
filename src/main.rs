@@ -8820,8 +8820,6 @@ impl GuiState {
                 p.term.lock().set_config(term::make_config(&self.cfg));
             }
         }
-        // 文字发光:纯渲染参数
-        self.renderer.set_text_glow(&self.cfg, self.window.scale_factor());
         // 半透明 / 材质:改了立刻重设。`window_background_opacity` 和
         // `win32_system_backdrop` 都是运行时就能换的。
         let per_pixel = apply_window_glass(&self.window, &self.cfg, &mut self.backend);

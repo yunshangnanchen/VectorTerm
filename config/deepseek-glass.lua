@@ -9,8 +9,7 @@
               Acrylic 材质,背后的一切先被糊掉再透上来;
     2) 逐像素透明 window_background_opacity = 0.35,只压**背景层** ——
               底色和每格单元格背景 35% 不透明,文字/光标/标签栏仍是实心;
-    3) 配色    前景提到 #F2F6FF、选区改成半透明品牌蓝;
-              再加一层克制的文字发光(text_glow),玻璃底上更好看。
+    3) 配色    前景提到 #F2F6FF、选区改成半透明品牌蓝。
 
   ── 为什么这次能真透 ────────────────────────────────────────────────
   以前不行:窗口交换链是 `CreateSwapChainForHwnd`,DXGI 不接受
@@ -20,19 +19,16 @@
   现在渲染层换成了 **DirectComposition 合成交换链**
   (`CreateSwapChainForComposition` + `IDCompositionVisual`),交换链本身带
   预乘 alpha:清屏和背景层按 opacity 输出,DWM 就能把材质垫在背后透出来。
-  这需要 GPU 后端(`render = "gpu"` 或 `"auto"`);CPU 软渲染会退回
-  "整窗统一 alpha"的老路(文字跟着变淡,也不模糊)。
+  这需要 GPU 后端(`render = "gpu"` 或 `"auto"`);CPU 软渲染拿不到逐像素
+  alpha,窗口会保持不透明(而不是把文字一起压淡),日志里会说明。
 
   ── 失焦之后 ────────────────────────────────────────────────────────
-  Win10 的 Acrylic 在窗口失去焦点时会被系统降级成纯色(wezterm 那个
-  "失焦毛玻璃就没了"就是它)。本项目在每次 Focused 事件里重设一次材质,
-  失焦/回来都重新要一次,所以焦点切来切去不会掉。
+  wezterm 的"切到别处毛玻璃就没了"是 DWM 材质(DWMSBT_TRANSIENTWINDOW)
+  在窗口失活时被系统撤掉。这里改用 accent 模糊(作用在窗口自身合成上,
+  与激活状态无关),实测有焦点/失焦的窗口内梯度能量都是 4.5,不会掉。
 
   ── 想要更夸张的效果 ────────────────────────────────────────────────
   - 更透:opacity 调到 0.20~0.25;再低文字和背景的分界就糊了。
-  - 更亮的光晕:text_glow.radius / intensity 往上加;
-    也可以换色,比如 color = "#7AA2FF" 或 "#FF6B9D"。
-  - 不想发光:把 text_glow.enabled 设成 false 即可。
   - 不想要模糊、只想透:win32_system_backdrop = "none"。
 
   每一项的含义见 docs/config-manual.md,透明度的完整说明见
@@ -131,15 +127,6 @@ return {
   -- DWM 材质:Acrylic(实时模糊窗口后方)。Mica 只采壁纸、更省电;
   -- tabbed 是 Win11 标签页材质。
   win32_system_backdrop = "Acrylic",
-
-  -- 文字发光:玻璃底上文字容易"陷进去",一圈同色系柔光能把它托起来。
-  -- 关掉就写 enabled = false。
-  text_glow = {
-    enabled   = true,
-    color     = "#7AA2FF",  -- 留空(nil)= 跟随每种文字自己的颜色
-    intensity = 0.55,       -- 0~1,越大越亮
-    radius    = 1.5,        -- 逻辑像素,1~4 比较克制
-  },
 
   -- ── 基础配色(§6.1):DARK 色板,前景按透明度提亮 ──────────────────
   colors = {

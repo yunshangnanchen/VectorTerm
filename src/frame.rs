@@ -54,8 +54,6 @@ pub enum Item {
         italic: bool,
         /// 没有 Bold face 时的合成加粗(再描一遍)
         bold: bool,
-        /// 字形不透明度。正常文字是 1.0;文字发光的"幽灵副本"用它压低亮度。
-        alpha: f32,
     },
     /// Kitty 风格尾迹四边形(顺时针四角)+ 挖空区域
     Trail {
@@ -114,22 +112,6 @@ pub struct Frame {
     /// 横向裁剪:从 `from` 号指令起,只画在 `[x0, x1)` 内。
     /// 到 `overlay_at`(标签栏)自动放开。
     pub clip_x: Option<ClipX>,
-    /// 文字发光参数。`None` = 不发光(默认)。
-    pub glow: Option<Glow>,
-}
-
-/// 文字发光的参数。
-///
-/// 实现方式是"同一张字形位图,按固定方向偏移若干像素、压低 alpha 叠一圈"。
-/// 字形本身只有十几像素,做真正的高斯模糊(离屏 + 两次模糊 pass)成本远高于
-/// 收益;12 个幽灵副本在毛玻璃/深色背景上看起来就是一圈柔光。
-#[derive(Clone, Copy, Debug)]
-pub struct Glow {
-    pub color: Rgb,
-    /// 单个副本的 alpha。调用方已经把总强度摊到每个副本上了。
-    pub alpha: f32,
-    /// 主环偏移半径(物理像素)。
-    pub radius: f32,
 }
 
 /// 横向裁剪区间,见 [`Frame::clip_x`]。
@@ -159,7 +141,6 @@ impl Default for Frame {
             trail_at: None,
             overlay_at: None,
             clip_x: None,
-            glow: None,
         }
     }
 }
@@ -236,26 +217,6 @@ impl Frame {
         italic: bool,
         bold: bool,
     ) {
-        if let Some(g) = self.glow {
-            // 先铺光晕,再铺本体:本体盖上之后字心仍然是字的颜色,
-            // 只有边缘留一圈柔光。
-            for &(dx, dy) in glow_offsets() {
-                self.items.push(Item::Glyph {
-                    id,
-                    src: [src.0 as f32, src.1 as f32, src.2 as f32, src.3 as f32],
-                    dst: [
-                        (dst.0 + dx * g.radius as f64) as f32,
-                        (dst.1 + dy * g.radius as f64) as f32,
-                        dst.2 as f32,
-                        dst.3 as f32,
-                    ],
-                    color: g.color,
-                    italic,
-                    bold: false,
-                    alpha: g.alpha,
-                });
-            }
-        }
         self.items.push(Item::Glyph {
             id,
             src: [src.0 as f32, src.1 as f32, src.2 as f32, src.3 as f32],
@@ -263,7 +224,6 @@ impl Frame {
             color,
             italic,
             bold,
-            alpha: 1.0,
         });
     }
 
@@ -299,25 +259,4 @@ impl Frame {
             dst: [x as f32, y as f32, w as f32, h as f32],
         });
     }
-}
-
-/// 发光副本的偏移方向(单位圆上的 8 方向 + 内环 4 方向)。
-///
-/// 内环那几个把光晕填实一点 —— 只画外环的话,小字号下会看到"八个点"。
-fn glow_offsets() -> &'static [(f64, f64)] {
-    const D: f64 = std::f64::consts::FRAC_1_SQRT_2;
-    &[
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-        (D, D),
-        (-D, D),
-        (D, -D),
-        (-D, -D),
-        (0.6, 0.0),
-        (-0.6, 0.0),
-        (0.0, 0.6),
-        (0.0, -0.6),
-    ]
 }

@@ -65,7 +65,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 | 文件 | 风格 | 画布 | 强调色 | 活动标签 |
 |---|---|---|---|---|
 | [`config/deepseek.lua`](config/deepseek.lua) | DeepSeek 夜空蓝 | `#0B1220` | `#4D6BFE` 品牌蓝 | 蓝底白字 |
-| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 毛玻璃 + 文字发光 | 真毛玻璃(accent 模糊 + 35% 背景) | `#5B7CFF` | 蓝底白字 |
+| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 毛玻璃 | 真毛玻璃(accent 模糊 + 35% 背景) | `#5B7CFF` | 蓝底白字 |
 | [`config/chatgpt.lua`](config/chatgpt.lua) | ChatGPT 纯灰阶 | `#212121` | `#FFFFFF` | 白底黑字 |
 | [`config/claude.lua`](config/claude.lua) | Claude 黏土橙 | `#1F1E1D` | `#D97757` | 橙底深墨字 |
 | [`config/gemini.lua`](config/gemini.lua) | Gemini 蓝紫粉 | `#131314` | `#1A73E8` / `#8AB4F8` | 蓝底白字 |
@@ -75,13 +75,11 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 
 `deepseek-glass` 是 deepseek 的"玻璃变体":尺寸、字号、标签栏、状态栏脚本逐项相同,
 多的是 `win32_system_backdrop = "Acrylic"`(真毛玻璃,**失焦不掉**)+
-`window_background_opacity = 0.35` + `text_glow`(文字外面一圈 `#7AA2FF` 柔光)。
+`window_background_opacity = 0.35`。
 
 玻璃要 `render = "auto"`/`"gpu"`:逐像素 alpha 走 DirectComposition 合成交换链,只有背景层
-半透明、文字保持实心;退回 CPU 后端会变成整窗 alpha,文字跟着一起变淡。
-文字发光默认是**关**的(`text_glow.enabled = false`),半径/强度/颜色都可自己调,
-详见 [手册 §13.7](docs/config-manual.md#137-text_glow文字发光) 与
-[自定义背景 §5/§6](docs/custom-background.md)。
+半透明、文字保持实心;CPU 后端拿不到逐像素 alpha 时窗口保持不透明(不会把文字一起压淡)。
+详见 [自定义背景 §5/§6](docs/custom-background.md)。
 
 **三种用法任选**:
 
@@ -116,7 +114,6 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 - 中英混排按 em 归一,汉字之间不留"空格缝";Nerd Font 图标自动发现并排在文本回退之前
 - 自定义背景:壁纸 / 模糊 / 渐变 / 五种填充 / 半透明(配置项名对齐 wezterm);GPU 后端逐像素 alpha,只有背景变淡
 - 毛玻璃:`win32_system_backdrop = "acrylic"` 是真磨砂,且**窗口失焦不掉**(wezterm 的已知毛病在这里修掉了)
-- 文字发光:`text_glow`,默认关,颜色 / 强度 / 半径自己设,热重载生效
 
 ### 交互
 
