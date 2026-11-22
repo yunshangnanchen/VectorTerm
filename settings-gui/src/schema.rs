@@ -2665,8 +2665,8 @@ pub static RENDER: Group = Group {
 
 pub static BACKGROUND: Group = Group {
     key: "background",
-    title: "背景与毛玻璃",
-    desc: "纯色、壁纸、压暗模糊、整窗透明、Win11 系统背板",
+    title: "背景、毛玻璃与发光",
+    desc: "纯色、壁纸、压暗模糊、背景透明、系统背板材质,以及文字发光",
     chapter: "第 13 章",
     fields: &[
         Field {
@@ -2824,10 +2824,10 @@ pub static BACKGROUND: Group = Group {
         },
         Field {
             path: "window_background_opacity",
-            label: "整窗不透明度",
+            label: "背景不透明度",
             kind: Kind::Float,
             default: None,
-            desc: "0–1;不写就是不透明",
+            desc: "0–1;不写就是不透明。GPU 后端只压背景层,文字保持实心",
             options: &[],
             lo: Some(0.0),
             hi: Some(1.0),
@@ -2838,21 +2838,21 @@ pub static BACKGROUND: Group = Group {
             sub: &[],
             sub_labels: &[],
             chapter: "13.6",
-            reload: Reload::Restart,
+            reload: Reload::Live,
             allow_none: true,
             none_label: "不透明",
             hint: "",
         },
         Field {
             path: "win32_system_backdrop",
-            label: "Win11 系统背板",
+            label: "系统背板材质",
             kind: Kind::Enum,
             default: Some("\"none\""),
-            desc: "系统级的毛玻璃 / 云母效果",
+            desc: "acrylic 是真磨砂,窗口失焦也不会掉;需配合上面的不透明度",
             options: &[
                 ("none", "不启用"),
                 ("mica", "Mica"),
-                ("acrylic", "Acrylic"),
+                ("acrylic", "Acrylic(磨砂)"),
                 ("tabbed", "Tabbed"),
                 ("auto", "自动"),
             ],
@@ -2865,7 +2865,7 @@ pub static BACKGROUND: Group = Group {
             sub: &[],
             sub_labels: &[],
             chapter: "13.5",
-            reload: Reload::Restart,
+            reload: Reload::Live,
             allow_none: false,
             none_label: "未设置",
             hint: "",
@@ -2889,6 +2889,90 @@ pub static BACKGROUND: Group = Group {
             reload: Reload::Restart,
             allow_none: true,
             none_label: "不用渐变",
+            hint: "",
+        },
+        Field {
+            path: "text_glow.enabled",
+            label: "文字发光",
+            kind: Kind::Bool,
+            default: Some("false"),
+            desc: "字形外面一圈柔光,深色玻璃底上更好看;随自己喜好开",
+            options: &[],
+            lo: None,
+            hi: None,
+            step: None,
+            unit: "",
+            item: "str",
+            count: 0,
+            sub: &[],
+            sub_labels: &[],
+            chapter: "13.7",
+            reload: Reload::Live,
+            allow_none: false,
+            none_label: "未设置",
+            hint: "",
+        },
+        Field {
+            path: "text_glow.color",
+            label: "光晕颜色",
+            kind: Kind::Color,
+            default: None,
+            desc: "不写就跟随每种文字自己的颜色(反色 / 彩色文字各有各的光)",
+            options: &[],
+            lo: None,
+            hi: None,
+            step: None,
+            unit: "",
+            item: "str",
+            count: 0,
+            sub: &[],
+            sub_labels: &[],
+            chapter: "13.7",
+            reload: Reload::Live,
+            allow_none: true,
+            none_label: "跟随文字",
+            hint: "",
+        },
+        Field {
+            path: "text_glow.intensity",
+            label: "发光强度",
+            kind: Kind::Float,
+            default: Some("0.55"),
+            desc: "0–1;越大越亮,过高小字号会糊成一团",
+            options: &[],
+            lo: Some(0.0),
+            hi: Some(1.0),
+            step: Some(0.05),
+            unit: "",
+            item: "str",
+            count: 0,
+            sub: &[],
+            sub_labels: &[],
+            chapter: "13.7",
+            reload: Reload::Live,
+            allow_none: false,
+            none_label: "未设置",
+            hint: "",
+        },
+        Field {
+            path: "text_glow.radius",
+            label: "光晕半径",
+            kind: Kind::Float,
+            default: Some("2.0"),
+            desc: "逻辑像素(按 DPI 缩放);1–4 比较克制",
+            options: &[],
+            lo: Some(0.0),
+            hi: Some(16.0),
+            step: Some(0.5),
+            unit: "px",
+            item: "str",
+            count: 0,
+            sub: &[],
+            sub_labels: &[],
+            chapter: "13.7",
+            reload: Reload::Live,
+            allow_none: false,
+            none_label: "未设置",
             hint: "",
         },
     ],
@@ -3653,3 +3737,51 @@ pub static ALIASES: &[(&str, &[&str])] = &[
     ("set_environment_variables", &["env"]),
     ("window_background_image_blur", &["window_background_blur"]),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 路径重复会让界面上出现两个控件写同一个键,值互相打架。
+    #[test]
+    fn no_duplicate_paths() {
+        let mut seen = std::collections::HashSet::new();
+        for f in all_fields() {
+            assert!(seen.insert(f.path), "配置项路径重复:{}", f.path);
+        }
+    }
+
+    /// 文字发光是"交给用户自己设"的效果,四项都得在界面上能改,且都是即时生效。
+    #[test]
+    fn text_glow_is_editable() {
+        for path in [
+            "text_glow.enabled",
+            "text_glow.color",
+            "text_glow.intensity",
+            "text_glow.radius",
+        ] {
+            let f = all_fields()
+                .into_iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("界面缺少配置项 {path}"));
+            assert_eq!(f.chapter, "13.7", "{path} 的章节号要和手册对齐");
+            assert_eq!(f.reload, Reload::Live, "{path} 改完应该立刻可见");
+        }
+
+        let enabled = all_fields()
+            .into_iter()
+            .find(|f| f.path == "text_glow.enabled")
+            .unwrap();
+        assert_eq!(enabled.kind, Kind::Bool);
+        assert_eq!(enabled.default, Some("false"), "默认必须关");
+    }
+
+    /// 背景组里那几项现在都能热重载了(渲染层会重设 alpha 与材质)。
+    #[test]
+    fn glass_fields_are_live() {
+        for path in ["window_background_opacity", "win32_system_backdrop"] {
+            let f = all_fields().into_iter().find(|f| f.path == path).unwrap();
+            assert_eq!(f.reload, Reload::Live, "{path} 应即时生效");
+        }
+    }
+}
