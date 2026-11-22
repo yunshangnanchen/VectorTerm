@@ -332,11 +332,12 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 | `window_decorations` | `"RESIZE"` | 没有系统标题栏,也没有 `INTEGRATED_BUTTONS` 的三枚按钮;四边四角仍可拖拽缩放 |
 | `tab_bar.enable` | `false` | 不画标签 |
 | `tab_bar.keep_as_title_bar` | `false` | **连那条"兼任标题栏"的空白条也不要**(见 [§8.2](#82-enable--at_bottom--hide_if_one)) |
-| `focus_border.enabled` | `true` | 失焦时淡入一圈 1px 白边(见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
+| `focus_border.enabled` | `true` | 失焦时淡入一圈 2px 白边(见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
 | `focus_border.fade_in_ms` | `220` | 缓入;拿回焦点时 `fade_out_ms = 140` 收回去 |
 
-没有标题栏以后:移动窗口用 **`Super + 左键`** 拖,双击仍最大化 / 还原,
-关窗口用 `Alt+F4`,标签快捷键照旧(`Ctrl+Shift+T` 等)。
+没有标题栏以后:鼠标移到**窗口顶部一条**(与标签栏等高、光标变抓手)按住左键即可拖,
+窗口其它位置用 **`Super + 左键`** 拖;双击仍最大化 / 还原。关窗口用 `Alt+F4`,
+标签快捷键照旧(`Ctrl+Shift+T` 等)。
 
 ### 2.6 配置目录结构(current/ 与 keys/)
 
@@ -920,7 +921,8 @@ font = { size = 15 },
 - macOS 专有标志(`MACOS_*`)在 Windows 上忽略;拼错的标志只提示不报错,不会挡住启动。
 - **没有系统标题栏时,标签栏兼任标题栏**:拖空白处移动窗口、双击最大化。
   即使 `tab_bar.enable = false`,也会留一条纯拖动条,否则窗口没法拖 ——
-  想连这条都不要,写 `tab_bar.keep_as_title_bar = false`,拖动改用 `Super + 左键`。
+  想连这条都不要,写 `tab_bar.keep_as_title_bar = false`:顶部一条与标签栏等高的区域
+  变成**隐形拖动带**(光标变抓手、按左键即拖、双击最大化),其余位置仍可用 `Super + 左键`。
 - `"RESIZE"` 的缩放热区由程序自绘(winit 的无装饰窗口把非客户区压成 0,
   补 `WS_THICKFRAME` 不会出现系统边框),四边四角贴边时光标变双箭头。
 
@@ -1053,7 +1055,8 @@ tab_bar = {
 默认 `true`,因为那条栏同时也是拖动窗口、放窗口按钮的地方;关掉以后这两件事都要
 另找出路:
 
-- 移动窗口:按住 **Super(Win)+ 左键**任意位置拖动,双击同一处仍是最大化 / 还原;
+- 移动窗口:鼠标移到**窗口顶部一条**(与标签栏等高、光标变抓手)按住左键拖动,
+  或按住 **Super(Win)+ 左键**在任意位置拖;双击同一处仍是最大化 / 还原;
 - 缩放窗口:拖窗口最外圈几像素(无边框模式自绘的缩放热区);
 - 关窗口:`Alt+F4`。
 

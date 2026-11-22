@@ -4820,6 +4820,26 @@ impl GuiState {
         }
     }
 
+    /// 极简窗口(`csd` 且 `keep_as_title_bar = false`)顶部那条"隐形拖动带"的高度。
+    ///
+    /// 取标签栏**本该占的高度** —— 手感上就像那条栏还在,只是不画了:
+    /// 鼠标按在顶部这一段就能拖窗口(双击最大化)。其它配置返回 0 ——
+    /// 它们要么有真标签栏可拖,要么用 `Super + 左键`。
+    fn drag_band_h(&self) -> f64 {
+        if !self.csd || self.cfg.tab_bar.keep_as_title_bar {
+            return 0.0;
+        }
+        if self.background.is_empty() {
+            return 0.0;
+        }
+        tab_bar_total_height(
+            &metrics_with_status_height(&self.cfg, self.renderer.cell_w, self.renderer.cell_h),
+            self.grid_px.1 as f64,
+            self.top_inset,
+            true,
+        )
+    }
+
     /// 当前标签栏应占的像素高度(0 = 不显示)
     fn tab_bar_height(&self) -> f64 {
         let count = self.background.len();
@@ -7388,6 +7408,20 @@ impl GuiState {
             }
         }
 
+        // 极简窗口顶部隐形拖动带:给个抓手光标,提示"这里能拖"。
+        // 位置在 resize 判定之后 —— 最外圈那几像素仍优先显示缩放光标。
+        let band = self.drag_band_h();
+        if self.resize_edge.is_none()
+            && band > 0.0
+            && y >= 0.0
+            && y <= band
+            && self.cursor_icon != CursorIcon::Grab
+        {
+            self.window.set_cursor(CursorIcon::Grab);
+            self.cursor_icon = CursorIcon::Grab;
+            return;
+        }
+
         // 标签栏:只更新悬停态,不参与选区,也不向应用报点
         // 关闭按钮悬停时整个标签也算悬停(背景一起亮)
         let hover = match hit {
@@ -7539,13 +7573,17 @@ impl GuiState {
                     return;
                 }
             }
-            // 极简窗口(tab_bar.keep_as_title_bar = false)里终端铺满整窗,
-            // 一个可拖的区域都没有 —— 拖动改由 `Super + 左键` 负责,
-            // 和浏览器 / 平铺窗管里的"按住 Win 拖"是同一套肌肉记忆。
+            // 极简窗口(tab_bar.keep_as_title_bar = false)里终端铺满整窗。
+            // 顶部一条与标签栏等高的区域当"隐形标题栏":鼠标按上去直接拖,
+            // 双击仍是最大化 —— 和无标签栏前拖标签栏的手感完全一致。
+            // 顶部这条被 resize_edge 判定优先占用(最外几像素是缩放),所以
+            // 实际可拖的是它往里那条,和真标签栏的可用区一致。
+            let band = self.drag_band_h();
             if button == WinitMouseButton::Left
-                && self.mods.super_key()
                 && self.csd
                 && self.tab_bar_layout().is_none()
+                && (self.mouse_px.1 >= 0.0 && self.mouse_px.1 <= band
+                    || self.mods.super_key())
             {
                 self.drag_title_bar();
                 return;

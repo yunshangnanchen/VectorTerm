@@ -1189,7 +1189,7 @@ pub static TABBAR: Group = Group {
             label: "关了标签栏也留一条",
             kind: Kind::Bool,
             default: Some("true"),
-            desc: "无边框模式下这条栏兼任标题栏;关掉才是真的一点不留(拖动改用 Super+左键)",
+            desc: "无边框模式下这条栏兼任标题栏;关掉后顶部一条变隐形拖动带,其余位置 Super+左键",
             options: &[],
             lo: None,
             hi: None,

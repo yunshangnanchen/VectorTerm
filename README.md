@@ -80,8 +80,9 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 
 `deepseek-glass-minimal` 再往前走一步:同一套玻璃,**标签栏、窗口按钮、标题栏全部不要**
 (`tab_bar.keep_as_title_bar = false`),窗口里只剩终端。没有标题栏就分不出焦点,
-所以它配了 `focus_border`:失去焦点时四周淡入一圈 1px 白边(220ms),拿回焦点 140ms 收回。
-拖动改成 `Super + 左键`。
+所以它配了 `focus_border`:失去焦点时四周淡入一圈 2px 白边(220ms),拿回焦点 140ms 收回。
+顶部一条与标签栏等高的区域是隐形拖动带(鼠标移上去变抓手),直接拖即可;窗口其它位置
+按住 `Super + 左键` 也能拖。
 
 玻璃要 `render = "auto"`/`"gpu"`:逐像素 alpha 走 DirectComposition 合成交换链,只有背景层
 半透明、文字保持实心;CPU 后端拿不到逐像素 alpha 时窗口保持不透明(不会把文字一起压淡)。
