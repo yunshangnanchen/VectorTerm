@@ -75,7 +75,7 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 
 `deepseek-glass` 是 deepseek 的"玻璃变体":尺寸、字号、标签栏、状态栏脚本逐项相同,
 多的是 `win32_system_backdrop = "Acrylic"`(真毛玻璃,**失焦不掉**)+
-`window_background_opacity = 0.35`。
+`window_background_opacity = 0.55`(整块背景的 55%,叠几层也只乘一次)。
 
 玻璃要 `render = "auto"`/`"gpu"`:逐像素 alpha 走 DirectComposition 合成交换链,只有背景层
 半透明、文字保持实心;CPU 后端拿不到逐像素 alpha 时窗口保持不透明(不会把文字一起压淡)。

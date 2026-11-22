@@ -2827,7 +2827,7 @@ pub static BACKGROUND: Group = Group {
             label: "背景不透明度",
             kind: Kind::Float,
             default: None,
-            desc: "0–1;不写就是不透明。GPU 后端只压背景层,文字保持实心",
+            desc: "0–1;不写就是不透明。GPU 后端只压背景,叠几层也只乘一次,文字保持实心",
             options: &[],
             lo: Some(0.0),
             hi: Some(1.0),

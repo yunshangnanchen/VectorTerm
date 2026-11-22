@@ -311,7 +311,7 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 
 | 键 | 值 | 作用 |
 |---|---|---|
-| `window_background_opacity` | `0.35` | 背景层 35% 不透明,桌面从背后透出 |
+| `window_background_opacity` | `0.55` | 整块背景 55% 不透明(叠几层也只乘一次),桌面从背后透出 |
 | `win32_system_backdrop` | `"Acrylic"` | 真毛玻璃(accent 模糊,失焦不掉,见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
 | `selection.opacity` | `0.30` | 选区是半透明品牌蓝 |
 
@@ -1831,7 +1831,7 @@ HSB 调整、模糊都在**加载时做一次**,产出的位图同时交给 CPU 
 | `window_background_blur` | 数字 | `0` | 模糊半径(相对图片原始像素),夹到 0–200 |
 | `window_background_image_blur` | 数字 | `0` | 上面那项的别名,两个都写时后者生效 |
 | `window_background_fill` | 字符串 | `"cover"` | 缩放 / 填充方式,见 13.3 |
-| `window_background_opacity` | 数字 | 无 | 背景层不透明度 0–1,夹到区间,见 13.6 |
+| `window_background_opacity` | 数字 | 无 | 背景不透明度 0–1(叠几层也只乘一次),夹到区间,见 13.6 |
 | `win32_system_backdrop` | 字符串 | `"none"` | Win11 系统背板,见 13.5 |
 | `window_background_gradient` | 表 | 无 | 渐变,见 13.4 |
 
@@ -1916,6 +1916,16 @@ accent 模糊后,有焦点与失焦时窗口内的梯度能量都是 4.5(窗外�
 GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无效)并把交换链挂在
 `IDCompositionVisual` 上。
 
+**这个值只乘一次。** 背景不是单独一层:清屏色、渐变/壁纸、单元格底色、标签栏底色
+是依次叠上去的,早先实现让每一层各乘一遍 `opacity`,于是总不透明度变成
+`1-(1-a)^n` —— `0.35` 在内容区实际是 0.58,标签栏那块叠了三层是 0.73,看起来就是
+标签栏下方一条更实的横带。现在背景类填行走一条**不写目标 alpha** 的管线
+(颜色乘以 `opacity`,alpha 只由清屏写一次),所以:
+
+- `0.35` 就是 35% 不透明,和叠了几层背景无关;
+- 标签栏、单元格底色与内容区严格一致;
+- 文字、光标、图片属于前景,完全不参与,永远实心。
+
 **CPU 后端给不出逐像素 alpha**,所以有两种情况:
 
 - 只配了 `opacity`(想要"整窗半透明"):如实按整窗 alpha 做,文字会一起变淡;
@@ -1926,7 +1936,9 @@ GPU 那条路要窗口带 `WS_EX_NOREDIRECTIONBITMAP`(创建时给,事后设无�
 `渲染后端:GPU(...)` / `渲染后端:CPU 软渲染`,先看这一行再排查别的。
 
 `0.85` 是"隐约透出背后的窗口",`0.3` 已经相当透。**不写这项就是完全不透明(`1.0`)**,
-即使配了 `win32_system_backdrop` 也不会自动变透明。
+即使配了 `win32_system_backdrop` 也不会自动变透明。注意这是**整块背景**的不透明度:
+以前调低时颜色会被多层衰减,现在不会,所以同样数值看起来比以前更透一档 ——
+玻璃配方就是因此从 `0.35` 调到了 `0.55`。
 
 背景项(`window_background_*` / `win32_system_backdrop`)支持热重载,见第 18 节。
 
@@ -3021,7 +3033,7 @@ return {
   -- },
   -- window_background_blur = 12,                       -- 0–200
   -- window_background_fill = "cover",                  -- cover|contain|stretch|tile|center
-  -- window_background_opacity = 0.92,                  -- 背景层不透明度(文字不变淡)
+  -- window_background_opacity = 0.92,                  -- 背景不透明度(文字不变淡)
   -- win32_system_backdrop = "none",                    -- none|mica|acrylic|tabbed
   -- window_background_gradient = {
   --   colors = { "#0b1020", "#1b2a4a" },
@@ -3086,7 +3098,7 @@ font = {
 window_background_image = "bg/wallpaper.jpg",
 window_background_image_hsb = { brightness = 0.45, saturation = 0.9 },
 window_background_blur = 10,
-window_background_opacity = 0.92,     -- 背景层半透明,文字保持实心(GPU 后端)
+window_background_opacity = 0.92,     -- 背景半透明,文字保持实心(GPU 后端)
 colors = { background = "#101418" },
 ```
 

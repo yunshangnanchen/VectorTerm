@@ -57,7 +57,9 @@ struct Instance {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
     size: [f32; 2],
-    _pad: [f32; 2],
+    /// 整窗不透明度:只给背景类填充的片元用(`fs_main_bg`)
+    bg_alpha: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -95,6 +97,8 @@ struct Seg {
     start: u32,
     end: u32,
     bind: BindRef,
+    /// 这一段是不是"背景类"填充(见 `Frame::bg_items`),决定用哪条管线
+    bg: bool,
 }
 
 /// 实例收集器。相邻且 bind 相同的实例合并成一段,切 bind / 切图层时断开,
@@ -119,11 +123,11 @@ impl Batches {
         self.force = true;
     }
 
-    fn push(&mut self, bind: BindRef, inst: Instance) {
+    fn push(&mut self, bind: BindRef, bg: bool, inst: Instance) {
         let start = self.insts.len() as u32;
         if !self.force {
             if let Some(last) = self.segs.last_mut() {
-                if last.bind == bind {
+                if last.bind == bind && last.bg == bg {
                     last.end = start + 1;
                     self.insts.push(inst);
                     return;
@@ -135,6 +139,7 @@ impl Batches {
             start,
             end: start + 1,
             bind,
+            bg,
         });
         self.insts.push(inst);
     }
@@ -206,6 +211,8 @@ pub struct GpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    /// 背景类填充用的变体:不写目标 alpha(见 `fs_main_bg`)
+    pipeline_bg: wgpu::RenderPipeline,
     trail_pipeline: wgpu::RenderPipeline,
     quad_bind: wgpu::BindGroup,
     trail_bind: wgpu::BindGroup,
@@ -329,7 +336,8 @@ impl DcompTarget {
 const SHADER: &str = r#"
 struct Globals {
     size: vec2<f32>,
-    _pad: vec2<f32>,
+    bg_alpha: f32,
+    _pad: f32,
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -376,8 +384,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Inst) -> VsOut {
     return o;
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+/// 两条片元入口共用的着色:算出直通颜色的覆盖率结果。
+/// 注意这里**不能**加 `@fragment` —— WGSL 不允许从别的函数调用入口函数。
+fn fs_shade(in: VsOut) -> vec4<f32> {
     // 图片与字形共用一条管线,只是绑定的纹理不同:
     // 图片那批实例的 bind group 把 atlas 换成了整张图,uv 直接是 0..1。
     let s = textureSample(atlas, samp, in.uv);
@@ -397,9 +406,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tinted = vec4<f32>(in.color.r, in.color.g, in.color.b, in.color.a * a * cov);
     // 图片分支也乘 color.a:背景层靠它在不动纹理的前提下做半透明
     let img = vec4<f32>(s.rgb, s.a * in.color.a);
-    let c = select(tinted, img, in.box.z < -0.5);
+    return select(tinted, img, in.box.z < -0.5);
+}
+
+/// 内容:字形、图片、光标、选区、分隔线。alpha 原样累积,预乘输出。
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let c = fs_shade(in);
     // 预乘输出:混合状态是 One / OneMinusSrcAlpha
     return vec4<f32>(c.rgb * c.a, c.a);
+}
+
+/// 背景类填充:清屏色、背景层(渐变/壁纸)、单元格底色、标签栏底色。
+///
+/// 颜色整体乘一次 `bg_alpha`,但**不写 alpha** —— 这条管线的 alpha 混合是
+/// `Zero / One`,目标 alpha 只有清屏写过的那一次。于是不管背景叠了几层
+/// (壁纸 + 标签栏 = 两层),窗口的不透明度都只等于 `window_background_opacity`,
+/// 不会变成 1-(1-a)^n 那种逐层累加。
+@fragment
+fn fs_main_bg(in: VsOut) -> @location(0) vec4<f32> {
+    let c = fs_shade(in);
+    return vec4<f32>(c.rgb * c.a * globals.bg_alpha, c.a);
 }
 "#;
 
@@ -844,7 +871,8 @@ impl GpuRenderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    // 片元也要读:背景类填充的 `fs_main_bg` 从 globals 取 bg_alpha
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -944,6 +972,21 @@ impl GpuRenderer {
                 operation: wgpu::BlendOperation::Add,
             },
         });
+        // 背景类填充的 alpha 混合:只让颜色落到目标上,alpha 保持清屏给的值。
+        // 否则每叠一层背景(壁纸、标签栏底色)窗口就少透一点,几层之后
+        // `window_background_opacity` 已经不再是"整窗不透明度"了。
+        let blend_bg = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("quads"),
             layout: Some(&quad_pipe_layout),
@@ -964,6 +1007,36 @@ impl GpuRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        // 与上一份唯一不同的是片元入口和 alpha 混合,见 `fs_main_bg`
+        let pipeline_bg = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("quads-bg"),
+            layout: Some(&quad_pipe_layout),
+            vertex: wgpu::VertexState {
+                module: &quad_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Instance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: QUAD_ATTRS,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &quad_module,
+                entry_point: Some("fs_main_bg"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: blend_bg,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1040,6 +1113,7 @@ impl GpuRenderer {
             queue,
             config,
             pipeline,
+            pipeline_bg,
             trail_pipeline,
             quad_bind,
             trail_bind,
@@ -1068,10 +1142,12 @@ impl GpuRenderer {
         &self.adapter_name
     }
 
-    /// 背景层不透明度(逐像素 alpha 的清屏值)。1.0 = 不透明。
+    /// 背景不透明度(逐像素 alpha 的清屏值)。1.0 = 不透明。
     ///
-    /// 只影响清屏和背景层:字形、光标、状态栏这些前景实例自己的 alpha 是
-    /// 1,所以窗口透出来了而文字依然实心 —— 这正是层叠窗口统一 alpha 做不到的。
+    /// 只作用在"背景类"填充上(清屏色、壁纸/渐变、单元格底色、标签栏底色),
+    /// 而且**整层合成完只乘一次** —— 叠几层背景都恰好是这个值,不是
+    /// 1-(1-a)^n。字形、光标、图片这些前景实例不参与,文字永远实心 ——
+    /// 这正是层叠窗口统一 alpha 做不到的。
     pub fn set_background_alpha(&mut self, alpha: f32) {
         self.bg_alpha = alpha.clamp(0.0, 1.0);
     }
@@ -1221,9 +1297,11 @@ impl GpuRenderer {
         color: [f32; 4],
         shear: f32,
         radius: f32,
+        bg: bool,
     ) {
         b.push(
             BindRef::Atlas,
+            bg,
             Instance {
                 rect: [x, y, w, h],
                 uv: [
@@ -1278,6 +1356,8 @@ impl GpuRenderer {
             for (rect, uv) in quads {
                 b.push(
                     BindRef::Image(key),
+                    // 背景层天然属于"背景类":与清屏色一起合成后整体透出去
+                    true,
                     Instance {
                         rect,
                         uv,
@@ -1464,7 +1544,9 @@ impl GpuRenderer {
                         color.b as f32 / 255.0,
                         *alpha,
                     ];
-                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, 0.0);
+                    // 这一段是背景类还是内容类,由渲染层在 `Frame::bg_items` 里标好
+                    let bg = frame.bg_items.binary_search(&i).is_ok();
+                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, 0.0, bg);
                 }
                 Item::RoundRect {
                     x,
@@ -1481,7 +1563,8 @@ impl GpuRenderer {
                         color.b as f32 / 255.0,
                         *alpha,
                     ];
-                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, *radius);
+                    let bg = frame.bg_items.binary_search(&i).is_ok();
+                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, *radius, bg);
                 }
                 Item::Glyph {
                     id,
@@ -1503,6 +1586,7 @@ impl GpuRenderer {
                     let shear = if *italic { dst[3] * 0.22 } else { 0.0 };
                     b.push(
                         BindRef::Atlas,
+                        false,
                         Instance {
                             rect: [dst[0], dst[1], dst[2], dst[3]],
                             uv: [u0, v0, u1, v1],
@@ -1524,6 +1608,7 @@ impl GpuRenderer {
                     // 整张图一个四边形:uv 直接铺满 0..1,与 CPU 的双线性缩放一致
                     b.push(
                         BindRef::Image(*key),
+                        false,
                         Instance {
                             rect: [dst[0], dst[1], dst[2], dst[3]],
                             uv: [0.0, 0.0, 1.0, 1.0],
@@ -1569,7 +1654,8 @@ impl GpuRenderer {
                     self.config.width as f32,
                     self.config.height as f32,
                 ],
-                _pad: [0.0, 0.0],
+                bg_alpha: self.bg_alpha,
+                _pad: 0.0,
             }),
         );
         if let Some(Item::Trail {
@@ -1731,7 +1817,13 @@ impl GpuRenderer {
                         None => continue,
                     },
                 };
-                pass.set_pipeline(&self.pipeline);
+                // 背景类填充走"不写 alpha"的那条管线:整窗透明度只由清屏决定
+                let pipe = if seg.bg {
+                    &self.pipeline_bg
+                } else {
+                    &self.pipeline
+                };
+                pass.set_pipeline(pipe);
                 pass.set_bind_group(0, bind, &[]);
                 pass.set_vertex_buffer(0, self.instances.slice(..));
                 pass.draw(0..6, seg.start..seg.end);
@@ -1985,6 +2077,73 @@ mod tests {
         );
         assert!(mean < 3.0, "圆角两条路径差异过大(平均 {mean:.2}/255)");
         assert!(bad_ratio < 0.03, "差异像素占比 {:.1}% 过高", bad_ratio * 100.0);
+    }
+
+    /// 背景类填充只让清屏写一次 alpha:`window_background_opacity = 0.5` 时,
+    /// 不管背景叠了几层,透出去的都是 50%,而不是 1-(1-a)^n。
+    ///
+    /// 这正是"标签栏比内容区更实"那条横带的成因:清屏、壁纸、标签栏底色
+    /// 各自乘过一次 opacity,三层下来 0.35 变成了 0.73。
+    #[test]
+    fn bg_opacity_lands_once() {
+        let cfg = AppConfig::default();
+        let r = render::Renderer::new(&cfg, 1.0).unwrap();
+        let (w, h) = (32u32, 16u32);
+        let tint = render::Rgb {
+            r: 200,
+            g: 100,
+            b: 50,
+        };
+
+        let mut frame = Frame::default();
+        frame.begin(w, h, 0.0, render::Rgb { r: 0, g: 0, b: 0 });
+        // 左半:两层背景类填充叠在一起(相当于壁纸 + 标签栏底色)
+        frame.rect_bg(0.0, 0.0, 16.0, 16.0, tint, 1.0);
+        frame.rect_bg(0.0, 0.0, 16.0, 16.0, tint, 1.0);
+        // 右半:内容类填充(不参与窗口不透明度)
+        frame.rect(
+            16.0,
+            0.0,
+            16.0,
+            16.0,
+            render::Rgb {
+                r: 20,
+                g: 220,
+                b: 90,
+            },
+            1.0,
+        );
+
+        let mut gpu = match GpuRenderer::new_offscreen(w, h) {
+            Ok(g) => g,
+            Err(e) => {
+                crate::wlog!("跳过背景透明度测试:没有可用适配器({e:#})");
+                return;
+            }
+        };
+        gpu.set_background_alpha(0.5);
+        gpu.draw(&frame, &r).expect("GPU 绘制");
+        let px = gpu.read_pixels();
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            (
+                px[i] as i32,
+                px[i + 1] as i32,
+                px[i + 2] as i32,
+                px[i + 3] as i32,
+            )
+        };
+        let (bg_r, _, _, bg_a) = at(2, 8);
+        assert!(
+            (bg_a - 128).abs() <= 2,
+            "背景叠两层后 alpha 仍应是 50%,实际 {bg_a}"
+        );
+        assert!(
+            (bg_r - 100).abs() <= 3,
+            "背景色只该被乘一次 opacity(200×0.5≈100),实际 {bg_r}"
+        );
+        let (_, _, _, fg_a) = at(30, 8);
+        assert_eq!(fg_a, 255, "内容类填充必须保持不透明,否则文字会跟着变淡");
     }
 
     /// 横向裁剪两条后端都得认:CPU 夹 x 区间,GPU 收 scissor 宽度。

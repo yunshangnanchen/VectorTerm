@@ -112,6 +112,14 @@ pub struct Frame {
     /// 横向裁剪:从 `from` 号指令起,只画在 `[x0, x1)` 内。
     /// 到 `overlay_at`(标签栏)自动放开。
     pub clip_x: Option<ClipX>,
+    /// 属于"背景层"的矩形指令下标(升序):单元格底色、标签栏底色。
+    ///
+    /// 背景层的语义是"先自己叠成一张不透明的桌面,再整体按
+    /// `window_background_opacity` 透出去"。所以每条填充只带自己的 alpha,
+    /// 不乘窗口不透明度 —— 乘了就会逐层累加(0.35 叠两层变 0.58,标签栏三层
+    /// 变 0.73,看起来是一条更实的横带)。`gpu.rs` 靠这个标记把背景类填充
+    /// 送进不写 alpha 的管线。
+    pub bg_items: Vec<usize>,
 }
 
 /// 横向裁剪区间,见 [`Frame::clip_x`]。
@@ -141,6 +149,7 @@ impl Default for Frame {
             trail_at: None,
             overlay_at: None,
             clip_x: None,
+            bg_items: Vec::new(),
         }
     }
 }
@@ -158,6 +167,7 @@ impl Frame {
         self.trail_at = None;
         self.overlay_at = None;
         self.clip_x = None;
+        self.bg_items.clear();
     }
 
     /// 从**这一条指令起**开一条横向裁剪带:`[x0, x1)` 之外不画。
@@ -181,6 +191,16 @@ impl Frame {
             color,
             alpha,
         });
+    }
+
+    /// 背景类的矩形:清屏色之上、参与"整窗不透明度"的那些填充
+    /// (单元格底色、标签栏底色)。语义见 [`Frame::bg_items`]。
+    ///
+    /// 与 [`Frame::rect`] 的唯一区别是下标进了 `bg_items`,GPU 据此把它们
+    /// 画进"不写 alpha"的管线;CPU 端不在乎(它本来就不透明)。
+    pub fn rect_bg(&mut self, x: f64, y: f64, w: f64, h: f64, color: Rgb, alpha: f32) {
+        self.bg_items.push(self.items.len());
+        self.rect(x, y, w, h, color, alpha);
     }
 
     /// 圆角矩形。半径 0 等价于 `rect`,所以调用方不必分支。

@@ -11,7 +11,7 @@
 | `window_background_image_hsb` | `{ brightness, hue, saturation }` | 三个乘数，`1.0` = 原样 |
 | `window_background_blur` | 0~200 | 模糊半径（图片像素），`8~24` 是磨砂感 |
 | `window_background_fill` | `cover` / `contain` / `stretch` / `tile` / `center` | 填充方式，默认 `cover` |
-| `window_background_opacity` | 0~1 | 背景层不透明度，默认 1，见第 5 节 |
+| `window_background_opacity` | 0~1 | 整块背景的不透明度，默认 1，叠几层背景也只乘一次，见第 5 节 |
 | `window_background_gradient` | `{ colors = {a,b}, orientation }` | 两色渐变，画在图片下面 |
 | `win32_system_backdrop` | `none` / `mica` / `acrylic` / `tabbed` | 系统背板材质，`acrylic` 即毛玻璃，见第 6 节 |
 
@@ -41,7 +41,7 @@ window_background_image_hsb = { brightness = 0.5, saturation = 0.8 }
 **半透明（透出桌面）**
 ```lua
 window_background_color = "#101820"
-window_background_opacity = 0.82   -- 整窗一起变淡,CPU/GPU 都支持
+window_background_opacity = 0.82   -- GPU:只有背景变淡;CPU:整窗一起变淡
 ```
 
 **渐变**
@@ -103,10 +103,14 @@ stretch  拉伸铺满(不保比例)          tile  原尺寸平铺        center
 
 绘制时对 alpha 的处理：
 
-- 清屏色和背景层（壁纸 / 纯色 / 渐变）的 alpha 乘 `opacity`；
-- 单元格底色矩形和标签栏底色也乘同一个系数（漏掉任何一个，整块窗口就又不透了——
-  这是实现时踩到的第一个坑）；
-- 字形、光标、选中框 alpha 恒为 1，所以"背景半透明、文字实心"。
+- 清屏时写一次 `(清屏色 × opacity, opacity)` —— 这是整个窗口唯一一次决定 alpha；
+- 背景类填充（壁纸 / 纯色 / 渐变、单元格底色、标签栏底色）走一条**不写目标 alpha**
+  的管线：颜色乘 `opacity`，alpha 混合是 `Zero / One`，所以叠几层都只是"在透明的
+  底色上刷颜色"，总不透明度恒等于 `opacity`。早先的实现让每层各乘一遍，
+  总效果是 `1-(1-a)^n` —— `0.35` 在内容区变 0.58、叠了三层标签栏的地方变 0.73，
+  视觉上就是标签栏下方一条更实的横带；
+- 字形、光标、选中框、图片属于内容类，alpha 照常累积（字形恒为 1），
+  所以"背景半透明、文字实心"。
 
 `WS_EX_NOREDIRECTIONBITMAP` 这个位有个副作用：**没有重定向表面，GDI 就画不上去**。
 所以它只在"配置要玻璃 **且** 这次真的会走 GPU"时才给（窗口创建前先探一次硬件适配器）。

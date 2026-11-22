@@ -946,9 +946,6 @@ pub struct Renderer {
     font_dirs: Vec<PathBuf>,
     em_px: f32,
     pub cell_w: f64,
-    /// 背景层透明度缩放。1.0 = 原样(不透明);逐像素 alpha 的毛玻璃路径下
-    /// 由 `window_background_opacity` 决定,让背景层自己半透明而不是靠整窗变淡。
-    bg_alpha_scale: f32,
     /// 主字体的自然字距(未取整)。状态栏按它排版,和 wezterm 的 shaper 一致。
     pub advance_w: f64,
     pub cell_h: f64,
@@ -986,14 +983,6 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// 让背景层自己带透明度(逐像素 alpha 的毛玻璃路径)。
-    ///
-    /// 传 1.0 等于关闭。别在层叠窗口那条路上用:那条路已经对整窗做过
-    /// 一次 alpha,背景再乘一次会把壁纸衰减两遍。
-    pub fn set_background_alpha_scale(&mut self, scale: f32) {
-        self.bg_alpha_scale = scale.clamp(0.0, 1.0);
-    }
-
     pub fn new(cfg: &AppConfig, scale: f64) -> anyhow::Result<Self> {
         let em_px = cfg.fonts.size * scale as f32;
         let dirs = cfg.fonts.dirs.clone();
@@ -1114,7 +1103,6 @@ impl Renderer {
             emoji: crate::emoji::EmojiFont::load(crate::builtin_fonts::EMOJI_BYTES),
             emoji_cache: HashMap::new(),
             images_enabled: cfg.images.enabled,
-            bg_alpha_scale: 1.0,
             bg: load_background(cfg),
             bg_color: cfg
                 .background
@@ -1388,18 +1376,10 @@ impl Renderer {
         let clear = self.bg_color.unwrap_or(palette.bg);
         if begin {
             frame.begin(w, h, origin_y as f32, clear);
-            // 背景层(渐变在下、壁纸在上)交给两条后端自己画。
-            // `bg_alpha_scale` 只在"逐像素 alpha"那条路上 < 1:背景层自己
-            // 带透明度,DWM 才能从窗口背后透出材质;其余路径是 1.0。
-            if self.bg_alpha_scale >= 0.999 {
-                frame.bg.extend(self.bg.iter().cloned());
-            } else {
-                frame.bg.extend(self.bg.iter().map(|l| {
-                    let mut l = l.clone();
-                    l.alpha *= self.bg_alpha_scale;
-                    l
-                }));
-            }
+            // 背景层(渐变在下、壁纸在上)交给两条后端自己画。每层只带自己的
+            // alpha —— 窗口不透明度由 GPU 在整层合成之后乘一次,
+            // 这里再乘一遍就会逐层累加(见 `Frame::bg_items`)。
+            frame.bg.extend(self.bg.iter().cloned());
             // 标签栏在下方时,内容到它上沿为止;图片会越过网格,靠这个收边
             frame.clip_bottom = (h as f64 - self.content_bottom).max(0.0) as f32;
         }
@@ -1429,13 +1409,13 @@ impl Renderer {
                     //   看不出来但保证覆盖
                     // - 有壁纸/渐变/自定义纯色:必须让位,否则每格一个不透明
                     //   矩形会把整张背景盖死(清屏色已经铺满,不会露底)
-                    // 底色属于"背景层":逐像素 alpha 的毛玻璃路径下要跟着
-                    // 半透明,否则每格一个不透明矩形会把清屏的 alpha 整个盖掉
-                    // (表现就是"窗口完全不透")。其它路径下这个值是 1.0。
+                    // 底色属于"背景层":它和清屏色、壁纸一起合成,再整体按
+                    // `window_background_opacity` 透出去,所以走 `rect_bg`
+                    // (GPU 端不写 alpha 的那条管线)。
                     let default_bg = cell.bg == palette.bg;
                     let draw_bg = !default_bg || (self.bg.is_empty() && self.bg_color.is_none());
                     if draw_bg {
-                        frame.rect(cx, y, self.cell_w, self.cell_h, cell.bg, self.bg_alpha_scale);
+                        frame.rect_bg(cx, y, self.cell_w, self.cell_h, cell.bg, 1.0);
                     }
                     if self.images_enabled {
                         for im in &cell.images {
@@ -1610,7 +1590,8 @@ impl Renderer {
         let bar_bg = crate::term::color_from_str(&draw.colors.background).unwrap_or(default_bg);
         // 背景铺满整条栏(含靠窗口边框那侧的留白),四角交给 DWM 裁圆;
         // 标签/按钮只画在 content 带里,四周留白才均匀。
-        frame.rect(0.0, bar.y, w as f64, bar.h, bar_bg, self.bg_alpha_scale);
+        // 属于背景层(见 `Frame::bg_items`),否则它会比内容区多叠一层 alpha。
+        frame.rect_bg(0.0, bar.y, w as f64, bar.h, bar_bg, 1.0);
 
         let pad = (self.cell_w * 0.55).round().max(2.0);
         let baseline = content.y + (content.h - self.cell_h) / 2.0 + self.ascent;

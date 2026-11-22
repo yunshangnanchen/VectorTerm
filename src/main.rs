@@ -4367,11 +4367,9 @@ impl GuiState {
         );
 
         let mut backend = Backend::new(&cfg, window.clone())?;
-        // 逐像素 alpha 时背景层要自己带透明度 —— 否则整块底色仍是不透明的,
-        // 材质透不出来。整窗 alpha 那条路保持 1.0,免得衰减两遍。
-        if apply_window_glass(&window, &cfg, &mut backend) {
-            renderer.set_background_alpha_scale(cfg.background.effective_opacity());
-        }
+        // 不透明度全交给 GPU:清屏写 `opacity`,背景类填充只写颜色、不再写
+        // alpha,所以叠几层背景都只透一次(见 `gpu.rs` 的 `fs_main_bg`)。
+        apply_window_glass(&window, &cfg, &mut backend);
         // 玻璃路径的窗口是"藏着建"的(见 `with_visible(false)`)。后端与交换链
         // 都就绪了再露出来,用户就不会先看到几秒钟的空框。
         #[cfg(windows)]
@@ -8822,12 +8820,7 @@ impl GuiState {
         }
         // 半透明 / 材质:改了立刻重设。`window_background_opacity` 和
         // `win32_system_backdrop` 都是运行时就能换的。
-        let per_pixel = apply_window_glass(&self.window, &self.cfg, &mut self.backend);
-        self.renderer.set_background_alpha_scale(if per_pixel {
-            self.cfg.background.effective_opacity()
-        } else {
-            1.0
-        });
+        apply_window_glass(&self.window, &self.cfg, &mut self.backend);
         // 标签栏开关/位置变了,内容区高度跟着变
         self.relayout();
         // 状态栏的内容(固定文字 / 模块)可能也改了,立刻重算一次,不用等下一个 tick
