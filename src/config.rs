@@ -689,6 +689,45 @@ impl Default for PaneFocusConfig {
     }
 }
 
+/// 失焦描边:窗口没有焦点时沿四周描一圈很细的线,告诉用户"键盘现在不在这儿"。
+///
+/// 无边框 + 无标签栏的极简窗口里,系统标题栏的激活态高光没有了 —— 光看内容
+/// 分不出这个终端有没有焦点,打了一半的字可能全进了别的窗口。这里自绘一圈,
+/// 并且**带缓入**:失焦瞬间直接"啪"地出现一条白边太抢眼,淡进来才像材质的一部分。
+///
+/// 只画在失去焦点时。窗口拿到焦点时它淡出(比淡入快,手感上"回应用户"要利索)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FocusBorderConfig {
+    /// 总开关。默认关 —— 有系统标题栏的配置不需要,也不该被悄悄改变外观
+    pub enabled: bool,
+    /// 线宽(逻辑像素)。1.0 在 100% 缩放下就是一像素,再粗就成"框"了
+    pub width: f64,
+    /// 圆角半径(逻辑像素),要跟窗口圆角对上(DWM 的 `DWMWCP_ROUND` 是 8)
+    pub radius: f64,
+    /// 颜色,`"#RRGGBB"`
+    pub color: String,
+    /// 线条不透明度 0~1(淡入完成后就是这个值)
+    pub opacity: f32,
+    /// 淡入时长(ms),0 = 瞬间出现
+    pub fade_in_ms: f64,
+    /// 淡出时长(ms),0 = 瞬间消失
+    pub fade_out_ms: f64,
+}
+
+impl Default for FocusBorderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: 1.0,
+            radius: 8.0,
+            color: "#FFFFFF".to_string(),
+            opacity: 0.9,
+            fade_in_ms: 220.0,
+            fade_out_ms: 140.0,
+        }
+    }
+}
+
 /// 自定义背景。
 ///
 /// 字段名尽量对齐 wezterm,方便直接搬配置:
@@ -971,6 +1010,12 @@ pub struct TabBarConfig {
     /// 标签栏到窗口上边框(底部栏时到下边框)的距离(逻辑像素)。
     /// None = 自动跟随窗口圆角;0 = 贴边
     pub top_padding: Option<f64>,
+    /// 关闭标签栏时,无边框窗口要不要留一条"纯标题栏"。
+    ///
+    /// 默认 `true`:`window_decorations` 去掉 `TITLE` 之后,这条栏是唯一能拖动、
+    /// 能放按钮的地方,关了标签栏也得留着,否则窗口既拖不动也关不掉。
+    /// 设成 `false` 就真的一点都不留 —— 只剩终端,拖动改由 `Super` + 左键负责。
+    pub keep_as_title_bar: bool,
     pub colors: TabBarColors,
 }
 
@@ -985,6 +1030,7 @@ impl Default for TabBarConfig {
             show_index: true,
             show_new_tab_button: true,
             show_close_button: true,
+            keep_as_title_bar: true,
             corner_radius: None,
             edge_padding: None,
             top_padding: None,
@@ -1349,6 +1395,8 @@ pub struct AppConfig {
     pub window: WindowDecorations,
     /// 自定义背景:纯色 / 图片 / 渐变 / 透明度 / Win11 毛玻璃。见 [`BackgroundConfig`]。
     pub background: BackgroundConfig,
+    /// 失焦描边(细白边 + 缓入)。见 [`FocusBorderConfig`]。
+    pub focus_border: FocusBorderConfig,
     /// 分屏中间那根分割线的粗细 / 间距 / 两端留白 / 单色或渐变。见 [`SplitDividerConfig`]。
     pub split_divider: SplitDividerConfig,
     /// 分屏焦点:哪个 pane 显示输入光标、以及切换时的飞行动画。见 [`PaneFocusConfig`]。
@@ -1416,6 +1464,7 @@ impl Default for AppConfig {
             window_height: None,
             window: WindowDecorations::default(),
             background: BackgroundConfig::default(),
+            focus_border: FocusBorderConfig::default(),
             split_divider: SplitDividerConfig::default(),
             pane_focus: PaneFocusConfig::default(),
             files_gui: FilesGuiConfig::default(),
@@ -1655,6 +1704,11 @@ fn valid_theme_name(s: &str) -> bool {
 pub const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("deepseek", include_str!("../config/deepseek.lua")),
     ("deepseek-glass", include_str!("../config/deepseek-glass.lua")),
+    // 极简变体:没有标签栏/按钮/标题栏,只剩终端 + 失焦白边
+    (
+        "deepseek-glass-minimal",
+        include_str!("../config/deepseek-glass-minimal.lua"),
+    ),
     ("chatgpt", include_str!("../config/chatgpt.lua")),
     ("claude", include_str!("../config/claude.lua")),
     ("gemini", include_str!("../config/gemini.lua")),
@@ -1926,6 +1980,7 @@ fn parse_table(tbl: &mlua::Table) -> Result<AppConfig, String> {
     }
     parse_integrated_buttons(&tbl, &mut cfg.window);
     parse_background(&tbl, &mut cfg.background);
+    parse_focus_border(&tbl, &mut cfg.focus_border);
     parse_split_divider(&tbl, &mut cfg.split_divider);
     parse_pane_focus(&tbl, &mut cfg.pane_focus);
     parse_files_gui(&tbl, &mut cfg.files_gui);
@@ -2182,6 +2237,11 @@ fn parse_table(tbl: &mlua::Table) -> Result<AppConfig, String> {
         }
         if let Ok(Some(v)) = t.get::<Option<bool>>("show_close_button") {
             cfg.tab_bar.show_close_button = v;
+        }
+        // 无边框模式下这条栏兼任标题栏。关掉标签栏时要不要连标题栏一起收掉,
+        // 由这一项决定(默认保留 —— 少了它窗口就拖不动了)。
+        if let Ok(Some(v)) = t.get::<Option<bool>>("keep_as_title_bar") {
+            cfg.tab_bar.keep_as_title_bar = v;
         }
         // 原生表内写法优先于顶层别名
         if let Some(v) = opt_f64_field(&t, "edge_padding") {
@@ -2856,6 +2916,47 @@ fn parse_pane_focus(tbl: &mlua::Table, f: &mut PaneFocusConfig) {
             f.landing = CaretLanding::Center;
         } else if !v.is_empty() {
             f.landing = CaretLanding::Caret;
+        }
+    }
+}
+
+/// `focus_border = { ... }`:失焦时那圈细边。
+///
+/// 写法与其它子表一致,吃 `enabled` / `width` / `radius` / `color` /
+/// `opacity` / `fade_in_ms` / `fade_out_ms`;`color` 也接受 `"none"` 表示关闭。
+fn parse_focus_border(tbl: &mlua::Table, f: &mut FocusBorderConfig) {
+    let Ok(Some(t)) = tbl.get::<Option<mlua::Table>>("focus_border") else {
+        return;
+    };
+    if let Ok(Some(v)) = t.get::<Option<bool>>("enabled") {
+        f.enabled = v;
+    }
+    if let Some(v) = opt_f64_field(&t, "width") {
+        // 0 = 关闭(和 enabled = false 等价),上限 8:再粗就不像"细边"了
+        f.width = v.clamp(0.0, 8.0);
+    }
+    if let Some(v) = opt_f64_field(&t, "radius") {
+        // 负值 = 跟随窗口圆角(见渲染层的默认推导),这里只记非负值
+        f.radius = v.max(0.0);
+    }
+    if let Some(v) = opt_f64_field(&t, "opacity") {
+        f.opacity = v.clamp(0.0, 1.0) as f32;
+    }
+    // 时长用 f64:0 = 不要动画。上限 3000ms,再长就是"卡"而不是"缓入"
+    if let Some(v) = opt_f64_field(&t, "fade_in_ms") {
+        f.fade_in_ms = v.clamp(0.0, 3000.0);
+    }
+    if let Some(v) = opt_f64_field(&t, "fade_out_ms") {
+        f.fade_out_ms = v.clamp(0.0, 3000.0);
+    }
+    if let Ok(Some(v)) = t.get::<Option<String>>("color") {
+        let v = v.trim();
+        if v.eq_ignore_ascii_case("none") || v.is_empty() {
+            f.enabled = false;
+        } else if crate::term::color_from_str(v).is_some() {
+            f.color = v.to_string();
+        } else {
+            crate::wlog!("配置:focus_border.color = {v:?} 无法解析,保持 {}", f.color);
         }
     }
 }
@@ -4219,6 +4320,52 @@ mod tests {
         assert!(d.background.is_plain());
         assert_eq!(d.background.fill, ImageFill::Cover);
         assert!(!d.background.needs_transparent_window());
+    }
+
+    /// `focus_border`:失焦时才画的一圈细边。默认整套关掉 —— 有系统标题栏的
+    /// 配置本来就有激活态高光,不该被这一层悄悄改变外观。
+    #[test]
+    fn focus_border_defaults_and_parsing() {
+        let d = parse_str("return {}");
+        assert!(!d.focus_border.enabled, "默认不开");
+        assert_eq!(d.focus_border.width, 1.0);
+        assert_eq!(d.focus_border.fade_in_ms, 220.0);
+
+        let c = parse_str(
+            r##"return { focus_border = {
+                enabled = true, width = 1.5, radius = 6, color = "#E8F0FF",
+                opacity = 0.8, fade_in_ms = 260, fade_out_ms = 90,
+            } }"##,
+        );
+        assert!(c.focus_border.enabled);
+        assert_eq!(c.focus_border.width, 1.5);
+        assert_eq!(c.focus_border.radius, 6.0);
+        assert_eq!(c.focus_border.color, "#E8F0FF");
+        assert!((c.focus_border.opacity - 0.8).abs() < 1e-6);
+        assert_eq!(c.focus_border.fade_in_ms, 260.0);
+        assert_eq!(c.focus_border.fade_out_ms, 90.0);
+
+        // 越界值夹紧,不报错
+        let c = parse_str(
+            r#"return { focus_border = { enabled = true, width = 40, opacity = 9,
+                                        fade_in_ms = 99999 } }"#,
+        );
+        assert_eq!(c.focus_border.width, 8.0);
+        assert_eq!(c.focus_border.opacity, 1.0);
+        assert_eq!(c.focus_border.fade_in_ms, 3000.0);
+
+        // color = "none" 等于关掉(和别处的"空串/none 表示不画"一致)
+        let c = parse_str(r#"return { focus_border = { enabled = true, color = "none" } }"#);
+        assert!(!c.focus_border.enabled);
+    }
+
+    /// 无边框模式下标签栏兼任标题栏。`keep_as_title_bar = false` 才允许它整条消失。
+    #[test]
+    fn tab_bar_keep_as_title_bar() {
+        assert!(parse_str("return {}").tab_bar.keep_as_title_bar, "默认保留");
+        let c = parse_str("return { tab_bar = { enable = false, keep_as_title_bar = false } }");
+        assert!(!c.tab_bar.enabled);
+        assert!(!c.tab_bar.keep_as_title_bar);
     }
 
     /// `text_background_opacity`:单元格自设底色的透明度,默认 1.0(不透明)。

@@ -359,6 +359,8 @@ struct VsOut {
     @location(2) local: vec2<f32>,
     /// 矩形宽、高、圆角半径(像素);半径取负表示这批实例采样的是整张图
     @location(3) box: vec3<f32>,
+    /// 描边线宽(像素)。0 = 实心填充;>0 = 只画外沿那一圈(`Item::Ring`)
+    @location(4) stroke: f32,
 };
 
 @vertex
@@ -381,7 +383,15 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Inst) -> VsOut {
     o.color = inst.color;
     o.local = vec2<f32>(c.x * inst.rect.z, c.y * inst.rect.w);
     o.box = vec3<f32>(inst.rect.z, inst.rect.w, inst.extra.x);
+    o.stroke = inst.extra.y;
     return o;
+}
+
+/// 圆角盒的有符号距离:各角圆心围成的内矩形先取分量距离,再减半径。
+/// `p` 是相对矩形中心的偏移,`half` 是半宽高,`r` 是圆角半径。
+fn sdf_rr(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - (half - vec2<f32>(r, r));
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 /// 两条片元入口共用的着色:算出直通颜色的覆盖率结果。
@@ -392,13 +402,24 @@ fn fs_shade(in: VsOut) -> vec4<f32> {
     let s = textureSample(atlas, samp, in.uv);
     let a = s.r;
     var cov = 1.0;
+    let half = in.box.xy * 0.5;
+    let r = min(in.box.z, min(half.x, half.y));
     // 圆角矩形:用圆角盒的有符号距离算覆盖率,和 CPU 路径同一套公式
     if (in.box.z > 0.0) {
-        let half = in.box.xy * 0.5;
-        let r = min(in.box.z, min(half.x, half.y));
-        let q = abs(in.local - half) - (half - vec2<f32>(r, r));
-        let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+        let d = sdf_rr(in.local - half, half, r);
         cov = clamp(0.5 - d, 0.0, 1.0);
+    }
+    // 描边(`Item::Ring`):外圈覆盖率减内圈覆盖率,和 CPU 端的
+    // `stroke_round_rect` 完全一样 —— 四条边 + 四个圆角一次算完,
+    // 拼接式的画法会在拐角叠出更亮的一段。
+    if (in.stroke > 0.0) {
+        let sw = in.stroke;
+        let inner = half - vec2<f32>(sw, sw);
+        if (inner.x > 0.0 && inner.y > 0.0) {
+            let ri = min(max(r - sw, 0.0), min(inner.x, inner.y));
+            let d2 = sdf_rr(in.local - half, inner, ri);
+            cov = cov - clamp(0.5 - d2, 0.0, 1.0);
+        }
     }
     // 上一版这里写成"图片实例提前 return s",Intel 的 DXIL 编译器会把
     // 输出寄存器的 r 分量留着不覆盖,红通道恒为 1.0(整屏偏红)。
@@ -1297,6 +1318,7 @@ impl GpuRenderer {
         color: [f32; 4],
         shear: f32,
         radius: f32,
+        stroke: f32,
         bg: bool,
     ) {
         b.push(
@@ -1312,7 +1334,7 @@ impl GpuRenderer {
                 ],
                 color,
                 params: [shear, 0.0],
-                extra: [radius, 0.0],
+                extra: [radius, stroke],
             },
         );
     }
@@ -1546,7 +1568,27 @@ impl GpuRenderer {
                     ];
                     // 这一段是背景类还是内容类,由渲染层在 `Frame::bg_items` 里标好
                     let bg = frame.bg_items.binary_search(&i).is_ok();
-                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, 0.0, bg);
+                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, 0.0, 0.0, bg);
+                }
+                Item::Ring {
+                    x,
+                    y,
+                    w,
+                    h,
+                    radius,
+                    width,
+                    color,
+                    alpha,
+                } => {
+                    let c = [
+                        color.r as f32 / 255.0,
+                        color.g as f32 / 255.0,
+                        color.b as f32 / 255.0,
+                        *alpha,
+                    ];
+                    // 描边永远属于内容类:它要按自己的 alpha 混合在画好的
+                    // 内容之上,不能被"背景只透一次"那条规则吞掉
+                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, *radius, *width, false);
                 }
                 Item::RoundRect {
                     x,
@@ -1564,7 +1606,7 @@ impl GpuRenderer {
                         *alpha,
                     ];
                     let bg = frame.bg_items.binary_search(&i).is_ok();
-                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, *radius, bg);
+                    self.quad(&mut b, *x, *y, *w, *h, c, 0.0, *radius, 0.0, bg);
                 }
                 Item::Glyph {
                     id,

@@ -2614,6 +2614,25 @@ impl Renderer {
                     *color,
                     *alpha,
                 ),
+                Item::Ring {
+                    x,
+                    y,
+                    w: rw,
+                    h: rh,
+                    radius,
+                    width,
+                    color,
+                    alpha,
+                } => canvas.stroke_round_rect(
+                    *x as f64,
+                    *y as f64,
+                    *rw as f64,
+                    *rh as f64,
+                    *radius as f64,
+                    *width as f64,
+                    *color,
+                    *alpha,
+                ),
                 Item::Glyph {
                     id,
                     src,
@@ -3282,6 +3301,96 @@ impl Canvas<'_> {
                 }
                 let d = (dx * dx + dy * dy).sqrt() - r as f32;
                 let cov = (0.5 - d).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.blend(px, py, c, alpha * cov);
+                }
+            }
+        }
+    }
+
+    /// 圆角描边:一圈线,四条边和四个圆角一次算完。
+    ///
+    /// 用**两条有符号距离场相减**(外圈覆盖率减内圈覆盖率),而不是"四条
+    /// `fill_rect` + 四个小圆角"拼出来:拼接的拐角处会有两段半透明像素叠在
+    /// 一起,比直边亮一档,描边看起来像在四个角打了结。距离场相减没有接缝。
+    ///
+    /// 只遍历像素中心落在描边带里的那些格子:先按"内部实心区"整块跳过,
+    /// 1250×750 的窗口实际只算到四周几圈,不是 90 万次开方。
+    #[allow(clippy::too_many_arguments)]
+    fn stroke_round_rect(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        radius: f64,
+        width: f64,
+        c: Rgb,
+        alpha: f32,
+    ) {
+        let sw = width.max(0.0);
+        if sw <= 0.0 || w <= 0.0 || h <= 0.0 || alpha <= 0.0 {
+            return;
+        }
+        let short = w.min(h);
+        let r = radius.clamp(0.0, short * 0.5);
+        // 线宽吃满整条边:等价于实心圆角矩形
+        if sw * 2.0 >= short {
+            return self.fill_round_rect(x, y, w, h, r, c, alpha);
+        }
+        let x0 = (x.floor() as i32).max(self.clip_l);
+        let y0 = (y.floor() as i32).max(self.clip_top);
+        let x1 = ((x + w).ceil() as i32).min(self.clip_r);
+        let y1 = ((y + h).ceil() as i32).min(self.h as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        // 圆角盒的有符号距离:各角圆心连成内矩形,先取到内矩形的分量距离,
+        // 再减去半径。`<= 0` 即在形状内部。
+        let sdf = |px: f32, py: f32, ox: f32, oy: f32, ow: f32, oh: f32, or: f32| -> f32 {
+            let ix0 = ox + or;
+            let iy0 = oy + or;
+            let ix1 = ox + ow - or;
+            let iy1 = oy + oh - or;
+            let dx = (ix0 - px).max(px - ix1).max(0.0);
+            let dy = (iy0 - py).max(py - iy1).max(0.0);
+            (dx * dx + dy * dy).sqrt() - or
+        };
+        let (ox, oy, ow, oh) = (x as f32, y as f32, w as f32, h as f32);
+        let rf = r as f32;
+        let swf = sw as f32;
+        let ri = (r - sw).max(0.0) as f32;
+        let (ix, iy, iw, ih) = (ox + swf, oy + swf, ow - 2.0 * swf, oh - 2.0 * swf);
+        // 内圈实心区(去掉圆角前的四角圆心矩形):落在里面直接跳过
+        let (kx0, ky0) = (ix + ri, iy + ri);
+        let (kx1, ky1) = (ix + iw - ri, iy + ih - ri);
+        for py in y0..y1 {
+            let cy = py as f32 + 0.5;
+            if cy > ky0 && cy < ky1 {
+                // 中间的行只剩左右两条竖边要算
+                for px in x0..x1 {
+                    let cx = px as f32 + 0.5;
+                    if cx > kx0 && cx < kx1 {
+                        continue;
+                    }
+                    let d = sdf(cx, cy, ox, oy, ow, oh, rf);
+                    let cov = (0.5 - d).clamp(0.0, 1.0);
+                    if cov > 0.0 {
+                        self.blend(px, py, c, alpha * cov);
+                    }
+                }
+                continue;
+            }
+            for px in x0..x1 {
+                let cx = px as f32 + 0.5;
+                let d_out = sdf(cx, cy, ox, oy, ow, oh, rf);
+                let cov_out = (0.5 - d_out).clamp(0.0, 1.0);
+                if cov_out <= 0.0 {
+                    continue;
+                }
+                let d_in = sdf(cx, cy, ix, iy, iw, ih, ri);
+                let cov_in = (0.5 - d_in).clamp(0.0, 1.0);
+                let cov = cov_out - cov_in;
                 if cov > 0.0 {
                     self.blend(px, py, c, alpha * cov);
                 }

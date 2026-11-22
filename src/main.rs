@@ -964,6 +964,12 @@ impl ApplicationHandler<UserEvent> for App {
                     state.window.set_ime_allowed(true);
                     state.ime_area = None;
                 }
+                // 失焦白边:失去焦点 = 目标 1(淡入),拿回焦点 = 目标 0(淡出)。
+                // 极简窗口没有系统标题栏,不靠这一圈就分不出键盘在谁那儿。
+                state
+                    .focus_ring
+                    .go(if focused { 0.0 } else { 1.0 }, Instant::now());
+                state.window.request_redraw();
                 // 失焦重设材质。
                 //
                 // Win10 的 Acrylic(`ACCENT_ENABLE_ACRYLICBLURBEHIND`)在窗口
@@ -1455,6 +1461,8 @@ impl ApplicationHandler<UserEvent> for App {
                 || state.panel_anim.running()
                 || state.browser_anim.running()
                 || state.overlay_trail_on
+                // 失焦白边的淡入/淡出同样是连续帧
+                || state.focus_ring.needs_frames()
         } || ck_anim;
         if any_anim {
             wake = earlier(wake, Instant::now() + Duration::from_millis(8));
@@ -3950,6 +3958,82 @@ impl OverlayAnim {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 失焦描边
+// ---------------------------------------------------------------------------
+
+/// 失焦白边的淡入 / 淡出。
+///
+/// 和 `OverlayAnim` 同样只存"本轮从哪走到哪 + 起点时刻",每帧按已过时间重算
+/// 进度 —— 中间掉几帧也只是这一帧跨度大一点,不会积攒误差。
+///
+/// 两个方向都是 **ease-out**:淡入(失焦)先快后慢,像"边亮起来";淡出(重新
+/// 聚焦)更快也更急,回来了就该立刻有回应,还在慢慢收会显得迟钝。
+struct FocusRing {
+    /// 0 = 完全透明,1 = 达到配置里的不透明度
+    t: f64,
+    from: f64,
+    to: f64,
+    start: Instant,
+    /// 淡入 / 淡出时长(ms),来自 `focus_border.fade_in_ms` / `fade_out_ms`
+    in_ms: f64,
+    out_ms: f64,
+}
+
+impl FocusRing {
+    fn new(in_ms: f64, out_ms: f64) -> Self {
+        Self {
+            t: 0.0,
+            from: 0.0,
+            to: 0.0,
+            start: Instant::now(),
+            in_ms,
+            out_ms,
+        }
+    }
+
+    /// 热重载时同步时长。正在播的这一轮按新时长继续,不用重头再来。
+    fn set_timing(&mut self, in_ms: f64, out_ms: f64) {
+        self.in_ms = in_ms.max(0.0);
+        self.out_ms = out_ms.max(0.0);
+    }
+
+    /// 掉头去 `target`(0 或 1)。目标没变就什么都不做 —— 否则焦点事件抖动会让
+    /// 动画反复从头开始,白边闪一下又回去,看着像 bug。
+    fn go(&mut self, target: f64, now: Instant) {
+        let target = target.clamp(0.0, 1.0);
+        if (self.to - target).abs() < 1e-6 {
+            return;
+        }
+        self.from = self.t;
+        self.to = target;
+        self.start = now;
+    }
+
+    /// 推进到 `now`;返回"还在动"。
+    fn tick(&mut self, now: Instant) -> bool {
+        let going_up = self.to > self.from;
+        let dur = if going_up { self.in_ms } else { self.out_ms };
+        // 时长为 0(或负)= 不要动画:直接把目标值贴上
+        if dur <= 0.0 {
+            self.t = self.to;
+            return false;
+        }
+        let k = (now.duration_since(self.start).as_secs_f64() * 1000.0 / dur).clamp(0.0, 1.0);
+        let e = 1.0 - (1.0 - k).powi(3);
+        self.t = self.from + (self.to - self.from) * e;
+        k < 1.0
+    }
+
+    fn needs_frames(&self) -> bool {
+        (self.t - self.to).abs() > 1e-3
+    }
+
+    fn value(&self) -> f64 {
+        self.t
+    }
+}
+
 /// 浮层动画的坐标变换:绕自身中心等比缩放,再整体竖直位移。
 ///
 /// 单拎出来是因为面板里每个矩形、每行文字都要过同一个变换 —— 各算各的话,
@@ -4148,6 +4232,8 @@ struct GuiState {
     /// 浮层打开时"光标飞过去"的那条尾迹。和跨窗格尾迹用同一个状态机,
     /// 只是落点换成了浮层的输入光标。
     overlay_trail: cursor::CursorTrail,
+    /// 失焦白边的淡入/淡出进度(见 `FocusRing`)
+    focus_ring: FocusRing,
     /// 飞行动画是否已装填:只在浮层刚打开的那一段播,收敛后关掉
     overlay_trail_on: bool,
     /// 搜索结果重算的最早时刻:终端还在吐字时节流,别每帧扫一遍全量历史
@@ -4566,6 +4652,12 @@ impl GuiState {
                 t
             },
             overlay_trail_on: false,
+            // 启动那一刻窗口通常已经拿到焦点了,所以从 0 起步;
+            // 真是从后台启动的,第一帧的 `Focused(false)` 会把它推到 1。
+            focus_ring: FocusRing::new(
+                cfg.focus_border.fade_in_ms,
+                cfg.focus_border.fade_out_ms,
+            ),
             next_search_refresh: Instant::now(),
             scrollbar_drag: None,
             split_drag: None,
@@ -4732,6 +4824,9 @@ impl GuiState {
     fn tab_bar_height(&self) -> f64 {
         let count = self.background.len();
         if count == 0 {
+            return 0.0;
+        }
+        if self.csd && !self.cfg.tab_bar.keep_as_title_bar {
             return 0.0;
         }
         // 无边框模式下这一条同时是标题栏:拖动窗口、最小化/关闭都靠它。
@@ -4950,6 +5045,49 @@ impl GuiState {
             },
         };
         Some(tabbar::layout(w as f64, h as f64, count, &m, &opts))
+    }
+
+    /// 失焦白边:沿窗口最外沿描一圈很细的线,带淡入。
+    ///
+    /// 三处容易踩的地方:
+    /// * **必须放进叠加层**(`overlay_at`):Frame 默认把指令裁到内容区,
+    ///   而白边的上下两条正好在内容区外面,归在内容里会被整条裁掉;
+    /// * 圆角要跟窗口圆角对齐;最大化时 DWM 不画圆角,这里也得改回直角,
+    ///   否则四个角会留下四段"空着的弧";
+    /// * 线宽和圆角都乘 DPI。150% 缩放下 1 逻辑像素是 1.5 物理像素,按物理
+    ///   像素写死 1 会在高分屏上细到看不见。
+    fn paint_focus_border(&mut self, w: u32, h: u32) {
+        let cfg = &self.cfg.focus_border;
+        if !cfg.enabled || w == 0 || h == 0 {
+            return;
+        }
+        let alpha = (self.focus_ring.value() as f32) * cfg.opacity;
+        if alpha <= 0.002 {
+            return;
+        }
+        let Some(color) = crate::term::color_from_str(&cfg.color) else {
+            return;
+        };
+        let scale = self.window.scale_factor();
+        let width = (cfg.width * scale).max(1.0);
+        let radius = if self.zoomed() || !self.cfg.window.rounded_corners {
+            0.0
+        } else {
+            cfg.radius * scale
+        };
+        if self.frame.overlay_at.is_none() {
+            self.frame.overlay_at = Some(self.frame.items.len());
+        }
+        self.frame.ring(
+            0.0,
+            0.0,
+            w as f64,
+            h as f64,
+            radius,
+            width,
+            color,
+            alpha.clamp(0.0, 1.0),
+        );
     }
 
     fn tab_bar_hit(&self, x: f64, y: f64) -> Option<tabbar::Hit> {
@@ -7401,6 +7539,17 @@ impl GuiState {
                     return;
                 }
             }
+            // 极简窗口(tab_bar.keep_as_title_bar = false)里终端铺满整窗,
+            // 一个可拖的区域都没有 —— 拖动改由 `Super + 左键` 负责,
+            // 和浏览器 / 平铺窗管里的"按住 Win 拖"是同一套肌肉记忆。
+            if button == WinitMouseButton::Left
+                && self.mods.super_key()
+                && self.csd
+                && self.tab_bar_layout().is_none()
+            {
+                self.drag_title_bar();
+                return;
+            }
             if let Some(hit) = self.tab_bar_hit(self.mouse_px.0, self.mouse_px.1) {
                 match (button, hit) {
                     (WinitMouseButton::Left, tabbar::Hit::Close(i)) => self.close_tab_or_ask(i),
@@ -8808,6 +8957,11 @@ impl GuiState {
         // 单元格自设底色的透明度(`text_background_opacity`)也是纯渲染参数
         self.renderer
             .set_text_background_opacity(self.cfg.background.text_opacity);
+        // 失焦白边的淡入/淡出时长:改了立刻按新时长跑,不用重启
+        self.focus_ring.set_timing(
+            self.cfg.focus_border.fade_in_ms,
+            self.cfg.focus_border.fade_out_ms,
+        );
         // 活动标签 + 后台标签的所有 pane 都换调色板/回看行数/动画参数
         for p in self.tab.panes.iter_mut() {
             p.trail = CursorTrail::new(&self.cfg.cursor);
@@ -8913,6 +9067,8 @@ impl GuiState {
         // 用到最新的进度(缩放、位移、alpha 全从它算)
         self.search_anim.tick(now);
         self.panel_anim.tick(now);
+        // 失焦白边:纯时间函数,先推进再画
+        self.focus_ring.tick(now);
         // 文件面板:退场放完之后才算真正收摊 —— 面板数据、所属 pane 一起清
         self.browser_anim.tick(now);
         if !self.browser_anim.visible() && self.browser_exit.is_some() {
@@ -9511,6 +9667,9 @@ impl GuiState {
             self.renderer
                 .build_confirm_dialog(&mut self.frame, w, h, &draw);
         }
+
+        // 失焦白边:最后一个画,盖在所有叠加层之上(它只在窗口最外圈几像素)。
+        self.paint_focus_border(w, h);
 
         // 呈现
         let present_t0 = Instant::now();

@@ -43,6 +43,22 @@ pub enum Item {
         color: Rgb,
         alpha: f32,
     },
+    /// 空心圆角矩形(描边):失焦白边、以及以后任何"框住一块区域"的强调。
+    ///
+    /// 和 `RoundRect` 的区别只在覆盖率算法:外圈有符号距离减内圈,中间自然
+    /// 空出来,四条边和四个圆角一次画完,不会在拐角处叠出更亮的一段
+    /// (四条 `Rect` 拼接就会)。
+    Ring {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        /// 线宽(像素),从矩形外沿往内算
+        width: f32,
+        color: Rgb,
+        alpha: f32,
+    },
     /// 字形:引用渲染器字形表里的条目
     Glyph {
         id: u32,
@@ -223,6 +239,34 @@ impl Frame {
             w: w as f32,
             h: h as f32,
             radius: radius as f32,
+            color,
+            alpha,
+        });
+    }
+
+    /// 圆角描边。半径 0 就是直角细框,`width >= min(w,h)/2` 退化成实心块。
+    #[allow(clippy::too_many_arguments)]
+    pub fn ring(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        radius: f64,
+        width: f64,
+        color: Rgb,
+        alpha: f32,
+    ) {
+        if width <= 0.0 || w <= 0.0 || h <= 0.0 || alpha <= 0.0 {
+            return;
+        }
+        self.items.push(Item::Ring {
+            x: x as f32,
+            y: y as f32,
+            w: w as f32,
+            h: h as f32,
+            radius: radius as f32,
+            width: width as f32,
             color,
             alpha,
         });

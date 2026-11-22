@@ -234,7 +234,7 @@ return {
 |---|---|
 | 合并方式 | 先解析主题表,再把你写的键**深合并**盖上去。同名的表递归合并,所以只改 `colors.foreground` 时,主题里的 `colors.ansi` / `tab_bar` / `scrollbar` 等全部保留 |
 | 名字限制 | 只允许字母 / 数字 / `-` / `_`,最长 64 字符;`..`、斜杠、绝对路径一律拒绝(防止读到程序目录外的文件) |
-| 查找顺序 | ① 配置文件同目录 `themes/<name>.lua` → ② 同目录 `<name>.lua` → ③ `<exe 目录>\config\themes\<name>.lua` → ④ `<exe 目录>\config\<name>.lua` → ⑤ 工作目录下同样两处(开发时用) → ⑥ **exe 内置副本**(`deepseek` / `deepseek-glass` / `chatgpt` / `claude` / `gemini` 五套,磁盘上都没有时才用) |
+| 查找顺序 | ① 配置文件同目录 `themes/<name>.lua` → ② 同目录 `<name>.lua` → ③ `<exe 目录>\config\themes\<name>.lua` → ④ `<exe 目录>\config\<name>.lua` → ⑤ 工作目录下同样两处(开发时用) → ⑥ **exe 内置副本**(`deepseek` / `deepseek-glass` / `deepseek-glass-minimal` / `chatgpt` / `claude` / `gemini` 六套,磁盘上都没有时才用) |
 | 找不到 / 语法错 | 按普通配置错误处理:窗口照常用内置默认配置打开,原因写进 `config-error.log`;报错里会列出可用的内置主题名 |
 | 不写 `theme` 也行 | 把 `deepseek.lua` 设为当前配置,或 `VectorTerm.exe --config "<exe 目录>\config\deepseek.lua"` |
 
@@ -322,6 +322,21 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 
 配色也顺带提了一档(`foreground` `#F2F6FF`、`cursor_bg` / `ansi[4]` `#5B7CFF`),
 玻璃背景下对比度不够会发灰。
+
+#### 极简变体:`deepseek-glass-minimal.lua`
+
+同一套玻璃,把所有**非终端**的东西拿掉:
+
+| 键 | 值 | 效果 |
+|---|---|---|
+| `window_decorations` | `"RESIZE"` | 没有系统标题栏,也没有 `INTEGRATED_BUTTONS` 的三枚按钮;四边四角仍可拖拽缩放 |
+| `tab_bar.enable` | `false` | 不画标签 |
+| `tab_bar.keep_as_title_bar` | `false` | **连那条"兼任标题栏"的空白条也不要**(见 [§8.2](#82-enable--at_bottom--hide_if_one)) |
+| `focus_border.enabled` | `true` | 失焦时淡入一圈 1px 白边(见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
+| `focus_border.fade_in_ms` | `220` | 缓入;拿回焦点时 `fade_out_ms = 140` 收回去 |
+
+没有标题栏以后:移动窗口用 **`Super + 左键`** 拖,双击仍最大化 / 还原,
+关窗口用 `Alt+F4`,标签快捷键照旧(`Ctrl+Shift+T` 等)。
 
 ### 2.6 配置目录结构(current/ 与 keys/)
 
@@ -904,7 +919,8 @@ font = { size = 15 },
 - `INTEGRATED_BUTTONS` 与 `TITLE` 互斥:写了前者,系统标题栏一定去掉。
 - macOS 专有标志(`MACOS_*`)在 Windows 上忽略;拼错的标志只提示不报错,不会挡住启动。
 - **没有系统标题栏时,标签栏兼任标题栏**:拖空白处移动窗口、双击最大化。
-  即使 `tab_bar.enable = false`,也会留一条纯拖动条,否则窗口没法拖。
+  即使 `tab_bar.enable = false`,也会留一条纯拖动条,否则窗口没法拖 ——
+  想连这条都不要,写 `tab_bar.keep_as_title_bar = false`,拖动改用 `Super + 左键`。
 - `"RESIZE"` 的缩放热区由程序自绘(winit 的无装饰窗口把非客户区压成 0,
   补 `WS_THICKFRAME` 不会出现系统边框),四边四角贴边时光标变双箭头。
 
@@ -1000,6 +1016,7 @@ integrated_title_button_style = "Gnome"
 | `show_index` | `show_tab_index_in_tab_bar` | 布尔 | `true` |
 | `show_new_tab_button` | `show_new_tab_button_in_tab_bar` | 布尔 | `true` |
 | `show_close_button` | `show_close_tab_button_in_tabs` | 布尔 | `true` |
+| `keep_as_title_bar` | — | 布尔 | `true` |
 | `corner_radius` | — | 数字 | 自动 |
 | `edge_padding` | `tab_bar_edge_padding` | 数字 | 自动 |
 | `top_padding` | `tab_bar_top_padding` | 数字 | 自动 |
@@ -1015,6 +1032,7 @@ tab_bar = {
   show_index = true,
   show_new_tab_button = true,
   show_close_button = true,
+  keep_as_title_bar = true,
   corner_radius = 8,
   edge_padding = 10,
   top_padding = 10,
@@ -1026,9 +1044,24 @@ tab_bar = {
 
 | 项 | 效果 |
 |---|---|
-| `enable = false` | 整条标签栏消失。**左右状态栏也一起消失**(它们画在这条栏上)。无边框模式下退化成一条纯拖动条(否则窗口没法拖) |
+| `enable = false` | 整条标签栏消失。**左右状态栏也一起消失**(它们画在这条栏上)。无边框模式下退化成一条纯拖动条(否则窗口没法拖;要连这条也不要,见 `keep_as_title_bar`) |
 | `at_bottom = true` | 标签栏放到窗口底部,内容区在上 |
 | `hide_if_one = true` | 只有一个标签时不占高度,内容区自动多一行;新建标签时出现 |
+| `keep_as_title_bar = false` | 无边框模式下**真的把那条纯拖动条也收掉**(高度归零),窗口里只剩终端 |
+
+`keep_as_title_bar` 只影响无边框模式(`window_decorations` 里没有 `TITLE`)。
+默认 `true`,因为那条栏同时也是拖动窗口、放窗口按钮的地方;关掉以后这两件事都要
+另找出路:
+
+- 移动窗口:按住 **Super(Win)+ 左键**任意位置拖动,双击同一处仍是最大化 / 还原;
+- 缩放窗口:拖窗口最外圈几像素(无边框模式自绘的缩放热区);
+- 关窗口:`Alt+F4`。
+
+```lua
+-- 极简:只剩终端(见 config/deepseek-glass-minimal.lua)
+window_decorations = "RESIZE",
+tab_bar = { enable = false, keep_as_title_bar = false },
+```
 
 > 有系统标题栏(默认 `window_decorations = "TITLE\|RESIZE"`)时,`enable = false`
 > 就是**整条消失**,内容区顶到窗口上沿;只有去掉系统标题栏的无边框模式才会保留
@@ -1957,6 +1990,46 @@ text_background_opacity   = 1.0,   -- 提示符色块、反显、ls 目录底色
 
 背景项(`window_background_*` / `win32_system_backdrop`)支持热重载,见第 18 节。
 
+### 13.7 `focus_border`:失焦时的一圈细白边
+
+无边框 + 没有标签栏的窗口(`window_decorations = "RESIZE"` 且
+`tab_bar.keep_as_title_bar = false`)没有任何系统提示"这个窗口现在是不是激活的",
+打了一半的字可能全进了别的窗口。这一项自绘一圈细边,只在**失去焦点**时出现。
+
+| 键 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `focus_border.enabled` | 布尔 | `false` | 总开关。写 `color = "none"` 也等于关掉 |
+| `focus_border.width` | 数字 | `1.0` | 线宽(逻辑像素),夹到 0–8;`0` 等于关闭 |
+| `focus_border.radius` | 数字 | `8.0` | 圆角半径,与 DWM 窗口圆角对齐;窗口最大化时自动变直角 |
+| `focus_border.color` | 颜色 | `"#FFFFFF"` | 颜色,`"none"` = 关闭 |
+| `focus_border.opacity` | 数字 | `0.9` | 淡入完成后的线条不透明度 |
+| `focus_border.fade_in_ms` | 数字 | `220` | 淡入时长,`0` = 瞬间出现 |
+| `focus_border.fade_out_ms` | 数字 | `140` | 淡出时长,一般比淡入短 |
+
+```lua
+focus_border = {
+  enabled     = true,
+  width       = 1.0,
+  color       = "#FFFFFF",
+  opacity     = 0.9,
+  fade_in_ms  = 220,
+  fade_out_ms = 140,
+}
+```
+
+**为什么默认是关的:** 有系统标题栏的窗口本来就有激活态高光,再加一圈白边是重复的。
+它只对"完全自绘边框"的极简配方有意义 —— `config/deepseek-glass-minimal.lua` 就是
+为它配的。
+
+**缓存入的做法:** 淡入和淡出都走 ease-out(先快后慢),但淡出更快 —— 失焦时边"亮起来"
+要有一点过程,拿回焦点时还在慢慢收会显得迟钝。补间是**纯时间函数**(按已过时间算进度,
+不累加逐帧增量),窗口掉帧时只会这一帧跨度大一点,不会越拖越慢。
+
+线条是一条**圆角描边**:外圈覆盖率减内圈覆盖率,四条边和四个圆角一次算完。用四根
+`Rect` 拼起来的做法会在拐角处叠出两段半透明像素,比直边亮一档。
+
+这一项支持热重载(改时长会立刻按新时长跑)。
+
 ---
 
 ## 14 终端图片协议
@@ -2764,7 +2837,7 @@ domain / 多路复用(SSH/mux)相关的配置。
 | 选区 | `selection.*` |
 | 尾迹 | `cursor.*` |
 | 滚动 | `scroll` / `scroll.*`、`scrollback_lines`、`scrollbar.*`、`search.*`、`selection.edge_scroll` |
-| 标签栏 | `tab_bar.*`、所有顶层别名 |
+| 标签栏 | `tab_bar.*`(含 `keep_as_title_bar`,改完立刻重排内容区)、所有顶层别名 |
 | 状态栏 | `status_bar.*`(开关 / 字号倍数 / 高度 / 留白 / 片段间距 / 空格宽度 / 固定文字;改完下一次状态栏刷新即可见,见 [§8.7](#87-状态栏左边一条右边一条)) |
 | 分屏 | `split_divider.*`(粗细 / 间距 / 留白 / 单色 / 渐变 / 拖动与快捷键步长,下一帧生效,见 [§15.8](#158-分割线外观))、`pane_focus.*`(见 [§15.9](#159-分屏焦点)) |
 | 文件浏览器 | `files_gui.*`(打开方式 / 编辑器 / 侧边栏宽度 / 隐藏项 / 目录同步开关;`follow_cwd` 的 PowerShell 注入要重开窗口才生效,其余下次打开面板生效) |
@@ -2774,6 +2847,7 @@ domain / 多路复用(SSH/mux)相关的配置。
 | 主题 | `theme`(换主题或改覆盖项,保存**当前配置**就重新合并;主题里若带启动项仍要重启,见 [§2.5](#25-内置主题)) |
 | 行为 | `exit_behavior`、`quit_confirmation` |
 | 玻璃 | `window_background_opacity`、`win32_system_backdrop`(改完立刻重设 alpha 与材质,见 [§13.5](#135-win32_system_backdrop毛玻璃)) |
+| 失焦白边 | `focus_border.*`(开关 / 线宽 / 颜色 / 不透明度 / 淡入淡出时长,下一帧生效,见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
 | 图片 | `images.enable` |
 
 ### 18.2 新开标签才生效
@@ -3279,7 +3353,12 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | `tab_bar.show_index` | `true` |
 | `tab_bar.show_new_tab_button` | `true` |
 | `tab_bar.show_close_button` | `true` |
+| `tab_bar.keep_as_title_bar` | `true` |
 | `tab_bar.corner_radius` | 自动(约 8px) |
+| `focus_border.enabled` | `false` |
+| `focus_border.width` / `radius` | `1.0` / `8.0` |
+| `focus_border.color` / `opacity` | `"#FFFFFF"` / `0.9` |
+| `focus_border.fade_in_ms` / `fade_out_ms` | `220` / `140` |
 | `tab_bar.edge_padding` / `top_padding` | 自动(有标题栏 4 / 无边框+圆角 10,按 DPI 放大) |
 | `status_update_interval` | `1000`(毫秒;夹到 50–60000) |
 | `status_bar.enable` | `true` |
