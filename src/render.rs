@@ -1360,8 +1360,8 @@ pub struct Renderer {
 /// 14 号字 / 高 DPI 下曾只剩 2px)。所以要求借完之后还能剩 2px 以上,
 /// 不够就不吃 —— 余量够大时照旧吃,不能让"底部多空一行"的老毛病回来。
 ///
-/// 这里**只定行数**,不决定留白,分配在 `reflow_padding`(底边固定、
-/// 余下的全给顶部)。
+/// 这里**只定行数**,不决定留白,分配在 `reflow_padding`(上下同高,
+/// 余量两边各分一半)。
 fn fit_rows(usable: f64, cell_h: f64, pad_y: f64) -> usize {
     if cell_h <= 0.0 {
         return 2;
@@ -1381,13 +1381,16 @@ fn fit_rows(usable: f64, cell_h: f64, pad_y: f64) -> usize {
 /// 行数定了之后,决定窗口里没被行占掉的垂直空间怎么分。
 ///
 /// 行高由字体定死,窗口高又很少正好是整数倍,多出来的像素必须落在某一侧。
-/// 以前按上下均分:极简配置补贴一行后总共只剩 14px,底边 7px;有标签栏的
-/// 配置则是 12~15px —— 同一个 `padding=10`,输入行离底多远全看行数余数,
-/// 看起来就像"窗口没更新输入行的最低位置"。
+/// 以前试过两种极端:
+///   * 上下均分 —— 底边跟着余数走,同一个 `padding=10`,输入行离底 7~20px
+///     不等,看起来像"窗口没更新输入行的最低位置";
+///   * 底边定值、余量全给顶部 —— 底边稳了,但顶部开始在 6~22px 之间跳,
+///     拖一下窗口就换一个高度,反过来又成了"顶部留白不对"。
 ///
-/// 现在底边是**定值**:配置 padding + 字形到格子底边的 2px 视觉余量。
-/// 顶点把余下的都吃掉。滚动满屏时顶部那一行本来就会被裁,底部稳定更重要;
-/// 窗口很高时多出来的空白堆在顶部,不会把输入行吊在半空。
+/// 现在两侧**同高**:先各拿 `pad_y_base + 2px` 视觉余量,剩下的余量对半分;
+/// 空间不够(行数补贴过一行、把留白吃掉了一部分)就整体对半分。
+/// 这样上下的差永远不超过 0.5px,余数只在两边同时体现,不会一边高一边低。
+/// 取整交给 `cell_rect` —— 它是所有绘制的唯一入口。
 fn reflow_padding(
     h: f64,
     content_top: f64,
@@ -1398,13 +1401,12 @@ fn reflow_padding(
 ) -> f64 {
     let spare = (h - content_top - content_bottom - rows as f64 * cell_h).max(0.0);
     const OPTICAL_GAP: f64 = 2.0;
-    let bottom = (pad_y_base + OPTICAL_GAP)
-        .min(spare - OPTICAL_GAP)
-        .max(OPTICAL_GAP);
-    // 调用方拿到的是**顶**留白(origin_y),底边是剩余部分。
-    // 这里刻意保留小数(底边 14.5px 这类约定在多个预设间要对齐),
-    // 像素对齐交给 `cell_rect` —— 它是所有绘制的唯一入口。
-    (spare - bottom).max(0.0)
+    let anchor = pad_y_base + OPTICAL_GAP;
+    if spare >= anchor * 2.0 {
+        anchor + (spare - anchor * 2.0) * 0.5
+    } else {
+        spare * 0.5
+    }
 }
 
 impl Renderer {
@@ -4187,11 +4189,12 @@ mod tests {
         assert_eq!(rows, 31);
         let top = reflow_padding(750.0, 0.0, 0.0, rows, 23.0, base);
         let bottom = 750.0 - top - rows as f64 * 23.0;
-        assert!((bottom - 14.5).abs() < 0.01, "底边 {bottom:.1}px");
-        assert!((top - 22.5).abs() < 0.01, "多出来的空间堆在顶部:{top:.1}px");
+        // 余量 37px > 2×(12.5+2):两侧各拿 anchor 再平分剩下的,两边一样高
+        assert!((top - bottom).abs() < 0.51, "上下应等距:{top:.1} vs {bottom:.1}");
+        assert!((top - 18.5).abs() < 0.01, "两侧各 18.5px:{top:.1}px");
     }
 
-    /// 有标签栏时顶部占 43px,行数余数不同,但底边距必须还是 14.5px。
+    /// 有标签栏时顶部占 43px,行数余数不同,但**上下依然等距**。
     #[test]
     fn reflow_keeps_bottom_gap_when_tab_bar_on_top() {
         let top_bar = 43.0;
@@ -4201,7 +4204,28 @@ mod tests {
         let top = reflow_padding(750.0, top_bar, 0.0, rows, 23.0, base);
         let bottom = 750.0 - top_bar - top - rows as f64 * 23.0;
         assert_eq!(rows, 30);
-        assert!((bottom - 14.5).abs() < 0.01, "底边 {bottom:.1}");
+        // 补贴过一行后总余量只剩 17px,不够两侧都留满:整体对半分 8.5/8.5
+        assert!((top - bottom).abs() < 0.51, "上下应等距:{top:.1} vs {bottom:.1}");
+        assert!((top - 8.5).abs() < 0.01, "空间紧张时两侧各 8.5px:{top:.1}px");
+    }
+
+    /// 任意窗口高度下,上下留白都必须等距 —— 这是"顶部留白忽大忽小、拖一下
+    /// 窗口才顺眼"的根因:以前余量全塞给顶部,顶部在 6~22px 之间跳,底部不动。
+    #[test]
+    fn reflow_stays_symmetric_for_any_window_height() {
+        let base = 12.5;
+        let cell_h = 23.0;
+        for h in 600..=900u32 {
+            let usable = h as f64 - 2.0 * base;
+            let rows = fit_rows(usable, cell_h, base);
+            let top = reflow_padding(h as f64, 0.0, 0.0, rows, cell_h, base);
+            let bottom = h as f64 - top - rows as f64 * cell_h;
+            assert!(
+                (top - bottom).abs() < 0.51,
+                "h={h} 上下不等距:top={top:.2} bottom={bottom:.2}"
+            );
+            assert!(top > 2.0, "h={h} 顶部留白被吃光:{top:.2}");
+        }
     }
 
     /// 余量 19px 时仍要补贴,否则底部会像多空了一行(不能一刀切掉补贴)。
@@ -6318,5 +6342,3 @@ mod dump {
         crate::wlog!("tab bar frame -> {path} ({w}x{h})");
     }
 }
-
-

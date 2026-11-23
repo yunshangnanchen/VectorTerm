@@ -2099,6 +2099,88 @@ fn tab_bar_total_height(m: &tabbar::Metrics, window_h: f64, top_inset: f64, show
     }
 }
 
+/// 标签栏到底占不占高度。
+///
+/// **启动路径和每次 relayout 必须走同一条规则**:以前启动时用的是
+/// `csd() || (enabled && !hide_if_one)`,和运行时那套(先看 `csd` 与
+/// `keep_as_title_bar`,再看 `enabled` / `hide_if_one`)不是一回事。
+/// 极简玻璃那种 `enable = false, keep_as_title_bar = false` 的配方
+/// 被启动路径算成"要显示",于是首帧顶部空出整整一条栏高(~34px),
+/// 要等第一次拖窗口重新布局才归零 —— 用户看到的就是"顶部留白不对,
+/// 拖一下边框才正常"。
+fn tab_bar_shown(cfg: &AppConfig, csd: bool, tab_count: usize) -> bool {
+    if tab_count == 0 {
+        return false;
+    }
+    if csd && !cfg.tab_bar.keep_as_title_bar {
+        return false;
+    }
+    // 无边框模式下这条栏同时是标题栏:拖动窗口、最小化/关闭都靠它。
+    // 所以即使关了标签栏或设了 hide_if_one 也要留着,否则窗口会失去
+    // 所有可交互的边框 —— 用户只能 Alt+F4。
+    if !csd {
+        if !cfg.tab_bar.enabled {
+            return false;
+        }
+        if cfg.tab_bar.hide_if_one && tab_count <= 1 {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tab_bar_visible_tests {
+    use super::*;
+
+    fn cfg(no_title: bool, enabled: bool, keep_as_title_bar: bool, hide_if_one: bool) -> AppConfig {
+        let mut c = AppConfig::default();
+        c.window.title = !no_title;
+        c.tab_bar.enabled = enabled;
+        c.tab_bar.keep_as_title_bar = keep_as_title_bar;
+        c.tab_bar.hide_if_one = hide_if_one;
+        c
+    }
+
+    /// 回归:极简玻璃(`enable = false` + `keep_as_title_bar = false` + 无系统标题栏)
+    /// 启动时曾被算成"要占栏高",首帧顶部凭空多出 ~34px,拖一下窗口才归零。
+    #[test]
+    fn minimal_glass_reserves_no_tab_bar_height() {
+        let c = cfg(true, false, false, false);
+        assert!(!tab_bar_shown(&c, c.window.csd(), 1));
+    }
+
+    /// 无边框 + 没关 keep_as_title_bar(默认 true):那条栏还是唯一的拖动区,得留着。
+    #[test]
+    fn borderless_keeps_drag_band_when_tab_bar_disabled() {
+        let c = cfg(true, false, true, false);
+        assert!(tab_bar_shown(&c, c.window.csd(), 1));
+    }
+
+    /// 带标签栏的玻璃配方(enable = true,keep_as_title_bar 默认)。
+    #[test]
+    fn glass_with_tab_bar_shows_it() {
+        let c = cfg(true, true, true, false);
+        assert!(tab_bar_shown(&c, c.window.csd(), 1));
+        assert!(tab_bar_shown(&c, c.window.csd(), 3));
+    }
+
+    /// 有系统标题栏时 hide_if_one 才真正生效;多标签时出现。
+    #[test]
+    fn hide_if_one_only_hides_single_tab() {
+        let c = cfg(false, true, true, true);
+        assert!(!tab_bar_shown(&c, c.window.csd(), 1));
+        assert!(tab_bar_shown(&c, c.window.csd(), 2));
+    }
+
+    /// 一个标签都没有(后台/收尾阶段)时不占高。
+    #[test]
+    fn no_tabs_means_no_height() {
+        let c = cfg(true, true, true, false);
+        assert!(!tab_bar_shown(&c, c.window.csd(), 0));
+    }
+}
+
 /// 标签栏几何:`status_bar.height` 写了的话,把它当成这条栏的最小高度
 /// (状态栏是画在这条栏上的,想要更宽松的状态栏就调它)。
 fn metrics_with_status_height(cfg: &AppConfig, cell_w: f64, cell_h: f64) -> tabbar::Metrics {
@@ -4452,9 +4534,10 @@ impl GuiState {
         // ---- 标签栏占位 ----
         // 启动时只有 1 个标签:hide_if_one 为真就先不占高度,
         // 之后新建标签时 `relayout` 会重新算网格。
-        // 无边框模式例外:这条栏同时是标题栏,必须留着,否则窗口没法拖动。
+        // 走的是和运行时同一个判定(`tab_bar_shown`),两边不一致的话顶部会
+        // 多出一条栏高的空白,要等第一次 resize 才消失。
         let metrics = metrics_with_status_height(&cfg, renderer.cell_w, renderer.cell_h);
-        let show_bar = cfg.window.csd() || (cfg.tab_bar.enabled && !cfg.tab_bar.hide_if_one);
+        let show_bar = tab_bar_shown(&cfg, cfg.window.csd(), 1);
         let mut inner = window.inner_size();
         let bar_h = tab_bar_total_height(&metrics, inner.height as f64, top_inset, show_bar);
         renderer.content_top = if cfg.tab_bar.at_bottom { 0.0 } else { bar_h };
@@ -4993,23 +5076,8 @@ impl GuiState {
 
     /// 当前标签栏应占的像素高度(0 = 不显示)
     fn tab_bar_height(&self) -> f64 {
-        let count = self.background.len();
-        if count == 0 {
+        if !tab_bar_shown(&self.cfg, self.csd, self.background.len()) {
             return 0.0;
-        }
-        if self.csd && !self.cfg.tab_bar.keep_as_title_bar {
-            return 0.0;
-        }
-        // 无边框模式下这一条同时是标题栏:拖动窗口、最小化/关闭都靠它。
-        // 所以即使关了标签栏或设了 hide_if_one 也要留着,否则窗口会失去
-        // 所有可交互的边框 —— 用户只能 Alt+F4。
-        if !self.csd {
-            if !self.cfg.tab_bar.enabled {
-                return 0.0;
-            }
-            if self.cfg.tab_bar.hide_if_one && count <= 1 {
-                return 0.0;
-            }
         }
         tab_bar_total_height(
             &metrics_with_status_height(&self.cfg, self.renderer.cell_w, self.renderer.cell_h),
