@@ -59,6 +59,15 @@ if (-not (Test-Path $ExePath)) {
 $ExePath = (Resolve-Path $ExePath).Path
 Write-Step "目标程序:$ExePath"
 
+# 覆盖检查:HKCU\Software\Classes 在 Windows 的合并视图里**优先于** HKLM 的同名项。
+# 这个脚本写的是 HKCU,所以跑过之后,安装包装到别的目录也照样被它盖住 —— 右键打开
+# 的永远是"最后一次跑脚本时那个 exe"。这里提前说清楚,免得又出现"装了新版、
+# 右键却开开发版"。撤销用 -Remove(会一并删掉安装包写的那份镜像,重装即可恢复)。
+$hklmCmd = (Get-ItemProperty 'HKLM:\SOFTWARE\Classes\Directory\shell\VectorTerm\command' -Name '(default)' -ErrorAction SilentlyContinue).'(default)'
+if ($hklmCmd -and ($hklmCmd -notlike "*$ExePath*")) {
+    Write-Step "注意:系统里已有一份安装版注册($hklmCmd),本脚本会把它盖住;撤销用 -Remove"
+}
+
 foreach ($v in $verbs) {
     $key = Join-Path $base ($v.Key + '\shell\VectorTerm')
     $cmdKey = Join-Path $key 'command'

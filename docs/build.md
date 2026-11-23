@@ -279,7 +279,8 @@ winget install --id JRSoftware.InnoSetup -e
 
 ### 右键菜单那一项
 
-附加任务里的 **"在资源管理器右键菜单加入「在此处打开 VectorTerm」"**(默认勾选)会写三处:
+附加任务里的 **"在资源管理器右键菜单加入「在此处打开 VectorTerm」"**(默认勾选)会写三处 verb,
+每处都写两份(`HKA` 对应安装模式,再镜像一份到 `HKCU`,理由见下面的优先级那条):
 
 | 注册表位置 | 右键在哪 | 传进去的路径 |
 |---|---|---|
@@ -302,8 +303,12 @@ winget install --id JRSoftware.InnoSetup -e
   (否则右键点出来的是上次的老会话,目录还是旧的,看起来就像右键没生效),
   但仍走 mux 托管,这个新会话关掉之后照样能被恢复。日志里会写一句
   「命令行指定了目录:跳过会话恢复,按该目录新开」。
-- **写 `HKCU\Software\Classes`**("为所有用户安装"时是 `HKLM`),不需要管理员,
-  卸载时 `uninsdeletekey` 连 `command` 子键一起清掉。
+- **`HKCU` 与 `HKLM` 都写,是刻意的**:Windows 把 `HKCU\Software\Classes` 和
+  `HKLM\SOFTWARE\Classes` 合成一棵树,同一个 verb 名两处都有时**以 `HKCU` 为准**,
+  `HKLM` 那份直接看不见。而 `HKA` 按安装模式二选一("仅当前用户"→`HKCU`,"所有用户"→`HKLM`),
+  所以"先按当前用户装过、后来按所有用户装到别处"就会踩坑:右键打开的永远是旧目录的 exe。
+  镜像写一遍就地覆盖旧值,不依赖"先删干净";卸载时两处 `uninsdeletekey` 一起清掉。
+  (`App Paths` 同理,否则 `Win+R` 敲 `vectorterm` 也会跑到旧目录。)
 - **Windows 11 只把它放进「显示更多选项」**:新菜单默认只显示打包过的
   `IExplorerCommand`(需要 MSIX sparse package),老式 verb 一律落在二级菜单里。
   `Shift + 右键` 或右键 →「显示更多选项」就能看到,这是系统行为,不是没装好。
@@ -408,11 +413,11 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 test --release -- --nocaptu
 推一个 `v` 开头的 tag,就在 GitHub 的 Windows runner 上编译、打包、发 Release。
 
 ```bash
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
-Release 里的资产是 `VectorTerm-1.2.0-setup.exe` 与 `SHA256SUMS.txt`。
+Release 里的资产是 `VectorTerm-1.2.1-setup.exe` 与 `SHA256SUMS.txt`。
 单次约 20–40 分钟,时间基本花在 wgpu / eframe 的 release + lto 上。
 
 ### 版本号:tag 说了算

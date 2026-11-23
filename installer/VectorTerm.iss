@@ -8,7 +8,7 @@
 ; 编译(不要直接双击,版本号与输出目录由 build.cmd 传进来):
 ;   build.cmd installer
 ; 手动编译:
-;   ISCC.exe /DMyAppVersion=1.2.0 installer\VectorTerm.iss
+;   ISCC.exe /DMyAppVersion=1.2.1 installer\VectorTerm.iss
 ;
 ; 文件必须是 **UTF-8 with BOM**,否则 ISCC 按 ANSI 解码,中文会变乱码。
 ; =====================================================================
@@ -21,7 +21,7 @@
 
 ; build.cmd 从 Cargo.toml 读出真实版本后覆盖这个默认值
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.0"
+  #define MyAppVersion "1.2.1"
 #endif
 
 ; Release 产物路径。默认就是仓库里的 target\release\VectorTerm.exe;
@@ -89,7 +89,8 @@ Name: "zh"; MessagesFile: "ChineseSimplified.isl"
 ; 也在同一目录,一并加入 PATH。
 Name: "addtopath"; Description: "将 VectorTerm 加入 PATH 环境变量(任意终端可直接运行 vectorterm 与 vectorterm-settings)"; GroupDescription: "附加任务:"
 ; 资源管理器右键菜单:文件夹空白处 / 文件夹图标 / 盘符右键都能直接在这里开终端。
-; 写进 HKCU\Software\Classes(装给所有用户时是 HKLM),卸载时随 key 一起删干净。
+; 先写 HKA(对应安装模式:HKCU 或 HKLM),再镜像一份到 HKCU —— 后者在合并视图里优先,
+; 不镜像就压不掉旧安装留下的同名 verb,详见 [Registry] 里的说明。
 Name: "contextmenu"; Description: "在资源管理器右键菜单加入「在此处打开 VectorTerm」(文件夹、文件夹空白处、盘符)"; GroupDescription: "附加任务:"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"; Flags: unchecked
 
@@ -128,6 +129,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey
 ; 配置管理器同样进 App Paths,Win+R 敲 vectorterm-settings 也能开
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MySettingsExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MySettingsExeName}"; Flags: uninsdeletekey
+; 同上,镜像一份到 HKCU(理由见下面右键菜单那段):以前按"仅当前用户"装过的话,
+; HKCU 里的旧 App Paths 会压过 HKLM 的新值,Win+R 敲 vectorterm 打开的是旧目录的 exe。
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MySettingsExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MySettingsExeName}"; Flags: uninsdeletekey
 ; ---- 资源管理器右键菜单 ----
 ; 三处入口共用一套 verb:Directory\Background 是文件夹内空白处(%V = 当前目录),
 ; Directory 是文件夹图标(%1 = 被点的那个文件夹),Drive 是盘符(%1 = D:\)。
@@ -147,6 +152,27 @@ Root: HKA; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string;
 Root: HKA; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: contextmenu
 Root: HKA; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: contextmenu
 Root: HKA; Subkey: "Software\Classes\Drive\shell\VectorTerm\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --cwd ""%1\."""; Tasks: contextmenu
+;
+; ---- 同一套值再镜像写进 HKCU ----
+; Windows 把 HKCU\Software\Classes 和 HKLM\SOFTWARE\Classes 合成一棵树,同一个 verb
+; 名两处都有时**以 HKCU 为准**,HKLM 那份直接看不见。而本安装包默认
+; PrivilegesRequired=lowest,HKA 在"仅当前用户"时落在 HKCU、在"所有用户"时落在 HKLM ——
+; 于是最常见的翻车路线是:以前按当前用户装过一次(自己选了个目录,比如开发目录的
+; target\release),后来按所有用户装到别处;HKLM 写得再对,资源管理器用的仍是 HKCU 里
+; 那条旧值,点右键打开的还是旧目录的 exe。
+; 镜像写一遍等于就地覆盖旧值,不依赖"先删干净"(Inno 的 deletekey 遇到 command 子键
+; 未必删得掉);卸载时两处一起删,不会留下指向已删目录的孤儿项。
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\VectorTerm"; ValueType: string; ValueName: ""; ValueData: "在此处打开 VectorTerm"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\VectorTerm"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\VectorTerm\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --cwd ""%V\."""; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\VectorTerm"; ValueType: string; ValueName: ""; ValueData: "在此处打开 VectorTerm"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\VectorTerm"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\VectorTerm"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\VectorTerm\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --cwd ""%1\."""; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string; ValueName: ""; ValueData: "在此处打开 VectorTerm"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\VectorTerm"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\VectorTerm\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --cwd ""%1\."""; Tasks: contextmenu
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent

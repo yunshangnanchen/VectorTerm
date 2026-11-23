@@ -12,7 +12,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   <img src="https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="rust">
   <img src="https://img.shields.io/badge/renderer-softbuffer%20%7C%20wgpu%2FDX12-4b8bbe" alt="renderer">
   <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange" alt="license">
-  <img src="https://img.shields.io/badge/version-v1.2.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.2.1-blue" alt="version">
 </p>
 
 <p>
@@ -154,7 +154,7 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 - 文件浏览器:命令面板 `/files` 打开**铺满当前窗格**的列表(路径就是 shell 的 cwd),`Ctrl+Shift+E` 从左边分出**侧边栏**;面板**属于某个 pane** —— 在哪个终端打开就只铺那个 pane,点到另一个终端会连列表带 cwd 一起移交;**目录双向同步** —— 终端里 `cd` 面板跟着走,面板里进目录会给终端写一行 `cd`(开关 `files_gui.follow_cwd` / `push_cwd`,默认都开;PowerShell 靠自动注入的 prompt 钩子上报 OSC 7,cmd 靠读进程工作目录);方向键 / 鼠标选目录,回车默认**另开一个窗口**用 `nvim` / `vim`(可自定义)打开文件,也能改成右侧分屏或当前终端的 shell(见 `files_gui.open_mode`);编辑器找不到时面板底部给英文提示,见 [手册 §15.10](docs/config-manual.md#1510-文件浏览器)
 - 拖入路径:从资源管理器把**文件或文件夹**拖到窗口上,松手就在光标处输入它的**绝对路径**(含空格时自动加双引号,多个文件之间用空格隔开,分屏时写给落点那个窗格);`drag_drop.enabled` / `drag_drop.quote` 可调,见 [手册 §15.12](docs/config-manual.md#1512-拖入文件自动输入绝对路径)
 - 关窗确认:有程序在跑时先在内容区正中问一句 `[Y]es / [N]o`
-- 资源管理器右键集成:在**文件夹空白处**、**文件夹图标上**、**盘符上**右键都有「在此处打开 VectorTerm」,窗口直接落在那个目录(命令行 `--cwd` 传路径,`-d` 是等价别名);安装包里的附加任务默认勾选,想单独给某个 exe 注册/撤销用 `context-menu.ps1`。Windows 11 的老式菜单项会收在「显示更多选项」里,`Shift + 右键` 可直达,见 [构建文档](docs/build.md#右键菜单那一项)
+- 资源管理器右键集成:在**文件夹空白处**、**文件夹图标上**、**盘符上**右键都有「在此处打开 VectorTerm」,窗口直接落在那个目录(命令行 `--cwd` 传路径,`-d` 是等价别名);安装包里的附加任务默认勾选,想单独给某个 exe 注册/撤销用 `context-menu.ps1`(`HKCU` 优先于系统级注册,跑过它会盖住安装版那份,`-Remove` 撤销)。Windows 11 的老式菜单项会收在「显示更多选项」里,`Shift + 右键` 可直达,见 [构建文档](docs/build.md#右键菜单那一项)
 - 滚轮回看是亚行缓动动画,不是整数行瞬移;按键时输入优先回底,长按回车不会卡在半路
 - 回看缓冲可视化:每个 pane 一条**可拖动滚动条**(显示策略 always/auto/never、停靠侧、轨道显隐、轨道/滑块/悬停三色、宽度与透明度都可配),拖选到窗口边缘会**自动滚屏并继续扩选**;`Ctrl+Shift+F` 在**全部历史**里搜索、高亮匹配并逐条跳转,见 [手册 §11.4–11.5](docs/config-manual.md#114-可视化滚动条与边缘滚屏)
 - 浮层是有动画的:搜索栏 / 命令面板打开时**从下方非线性升到位 + 94%→100% 放大 + 淡入**(190ms,位移与缩放共一条 ease-out 曲线),关闭 160ms 收干净;打开的一瞬间**输入光标从终端里飞过去**,和跨窗格切换共用同一个 `CursorTrail`(同一份停留门限 / 衰减 / 颜色),见 [手册 §11.5](docs/config-manual.md#115-历史搜索)
