@@ -179,4 +179,4 @@ sync_atlas()   脏矩形上传新出现的字形（通常 0~2 块）
 - 正常出帧（200×60 格、1816×976 画布、满屏彩色文本）：GPU 2.28ms，CPU 13.74ms。
 - 冷启动首帧 / 峰值内存：GPU 580ms / 485MB，CPU 112ms / 55MB。
 
-完整口径见 [`benchmark/vectorterm-performance-benchmark.md`](../benchmark/vectorterm-performance-benchmark.md)。
+完整口径见 [`benchmark/VectorTerm-performance-benchmark.md`](benchmark/VectorTerm-performance-benchmark.md)。

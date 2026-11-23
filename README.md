@@ -12,7 +12,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   <img src="https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="rust">
   <img src="https://img.shields.io/badge/renderer-softbuffer%20%7C%20wgpu%2FDX12-4b8bbe" alt="renderer">
   <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange" alt="license">
-  <img src="https://img.shields.io/badge/version-v0.1.1-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-v0.1.2-blue" alt="version">
 </p>
 
 <p>
@@ -26,15 +26,16 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 
 </div>
 
-<img src="assets/screenshot.png" width="980" alt="VectorTerm 打开后的第一屏:DeepSeek 主题、fastfetch 立绘、oh-my-posh 提示符、标签栏状态栏">
+<img src="assets/screenshot.png" width="980" alt="VectorTerm 打开后的第一屏:deepseek-glass-minimal 主题、fastfetch 立绘、oh-my-posh 提示符">
 
-> 上图是用内置主题 [`config/deepseek.lua`](config/deepseek.lua) 渲染的**真实窗口帧**,
-> 内容是**打开 VectorTerm 后的第一屏**:你自己的 PowerShell 7 profile 跑起来的
-> fastfetch(立绘 logo + 硬件 / 软件 / 时间信息)与 oh-my-posh 提示符,加上主题的
-> 蓝色活动标签和标签栏右侧状态栏(时段问候语 / 时钟 / 日期 / 电量 / 签名)。
+> 上图是用内置极简主题 [`config/deepseek-glass-minimal.lua`](config/deepseek-glass-minimal.lua)
+> 渲染的**真实窗口帧**:真毛玻璃、没有标签栏、没有标题栏,整个窗口就是终端。
+> 内容是**打开 VectorTerm 后的第一屏** —— 你自己的 PowerShell 7 profile 跑起来的
+> fastfetch(立绘 logo + 硬件 / 软件 / 时间信息)与 oh-my-posh 提示符。
 > 没有演示脚本、没有模拟按键,也不是画出来的效果图;窗口尺寸完全沿用主题
-> 设定的 1250×750。重新生成只需
-> `python tools/diagnostics/readme_shot.py`(先 `build.cmd --release`)。
+> 设定的 1250×750。
+> 重新生成只需 `python tools/diagnostics/readme_shot.py`(先 `build.cmd --release`);
+> 想拍带标签栏和状态栏的完整界面就加 `--theme deepseek --out assets/screenshot-deepseek.png`。
 
 ## 这是什么
 
@@ -50,7 +51,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   DXGI 拉伸旧帧;4K / 高刷场景可一行配置切 GPU。
 - **配置就是 Lua**。键位、颜色、字体、标签栏、动画参数全部可改,保存即热重载;
   `VectorTerm.exe --config .wezterm.lua` 能直接吃 wezterm 原配置。
-- **五套内置配色,直接编进 exe**:DeepSeek 夜空蓝 / DeepSeek 夜空蓝·半透明磨砂 /
+- **五套内置配色,直接编进 exe**:DeepSeek 夜空蓝 / 石墨灰·半透明磨砂 /
   ChatGPT 纯灰阶 / Claude 黏土橙 / Gemini 蓝紫粉,用 `include_str!` 嵌进 `VectorTerm.exe`,
   单个 exe 拷到没有 `config\` 目录的机器上也能照常套用。见 [内置主题](#内置主题)。
 
@@ -65,8 +66,8 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 | 文件 | 风格 | 画布 | 强调色 | 活动标签 |
 |---|---|---|---|---|
 | [`config/deepseek.lua`](config/deepseek.lua) | DeepSeek 夜空蓝 | `#0B1220` | `#4D6BFE` 品牌蓝 | 蓝底白字 |
-| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | DeepSeek 夜空蓝 · 毛玻璃 | 真毛玻璃(accent 模糊 + 55% 背景) | `#5B7CFF` | 蓝底白字 |
-| [`config/deepseek-glass-minimal.lua`](config/deepseek-glass-minimal.lua) | 同上 · 极简(只剩终端) | 真毛玻璃,无标签栏 / 无按钮 / 无标题栏 | `#5B7CFF` | —(没有标签栏) |
+| [`config/deepseek-glass.lua`](config/deepseek-glass.lua) | 石墨灰 · 毛玻璃 | 中性石墨灰 `#15181D` + 真毛玻璃(accent 模糊,55% 背景) | `#5B7CFF` | 蓝底白字 |
+| [`config/deepseek-glass-minimal.lua`](config/deepseek-glass-minimal.lua) | 同上 · 极简(只剩终端) | 同上,无标签栏 / 无按钮 / 无标题栏 | `#5B7CFF` | —(没有标签栏) |
 | [`config/chatgpt.lua`](config/chatgpt.lua) | ChatGPT 纯灰阶 | `#212121` | `#FFFFFF` | 白底黑字 |
 | [`config/claude.lua`](config/claude.lua) | Claude 黏土橙 | `#1F1E1D` | `#D97757` | 橙底深墨字 |
 | [`config/gemini.lua`](config/gemini.lua) | Gemini 蓝紫粉 | `#131314` | `#1A73E8` / `#8AB4F8` | 蓝底白字 |
@@ -74,13 +75,24 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 12% 饱和度以便
 `git diff` / `ls` 还能分色);其余三套各有品牌色的分屏渐变与光标尾迹配色。
 
+带标签栏和状态栏的**完整界面**长这样(同样是真实窗口帧,不是效果图):
+
+<img src="assets/screenshot-deepseek.png" width="900" alt="deepseek.lua 主题:顶部标签栏、右侧状态栏、品牌蓝光标">
+
+左上角蓝色活动标签 + `+`、右上角状态栏(时段问候语 / 时钟 / 日期 / 电量 / 签名)
+都来自 [`config/deepseek.lua`](config/deepseek.lua);极简主题把这整条栏拿掉,
+只剩终端(见页首那张图)。
+
 `deepseek-glass` 是 deepseek 的"玻璃变体":尺寸、字号、标签栏、状态栏脚本逐项相同,
 多的是 `win32_system_backdrop = "Acrylic"`(真毛玻璃,**失焦不掉**)+
 `window_background_opacity = 0.55`(整块背景的 55%,叠几层也只乘一次)。
+底色不是 deepseek 的夜空蓝,而是**中性石墨灰** `#15181D`:蓝底叠上 45% 桌面之后
+整窗会明显发蓝(实测蓝偏 `+13`,桌面本身只有 `+5`),灰底压到 `+4` 左右,
+品牌蓝只留在光标、选区、活动标签这些点缀上。
 
 `deepseek-glass-minimal` 再往前走一步:同一套玻璃,**标签栏、窗口按钮、标题栏全部不要**
 (`tab_bar.keep_as_title_bar = false`),窗口里只剩终端。没有标题栏就分不出焦点,
-所以它配了 `focus_border`:失去焦点时四周淡入一圈 2px 白边(220ms),拿回焦点 140ms 收回。
+所以它配了 `focus_border`:失去焦点时四周淡入一圈 1px 白边(220ms),拿回焦点 140ms 收回。
 顶部一条与标签栏等高的区域是隐形拖动带(鼠标移上去变抓手),直接拖即可;窗口其它位置
 按住 `Super + 左键` 也能拖。
 
@@ -116,7 +128,8 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 ### 渲染
 
 - 粗体 / 斜体 / 暗淡 / 反显 / 闪烁 / 四种下划线 / 删除线,粗体与斜体优先用字体的真 face
-- 按字形角色排版:powerline 铺满整格、制表符保线宽、PUA 图标等比缩进,不越界不压邻格
+- 按字形角色排版:制表符保线宽;PUA / Nerd Font 图标按**字体原尺寸**画(和 wezterm 一样,允许溢出格子),墨迹中线对齐旁边的文字,不会又小又歪
+- **Powerline 分隔符(`U+E0B0`–`U+E0BF`)不取字体字形,直接按格子画**:三角形 / 半圆 / 斜线用 wezterm `customglyph.rs` 的同一套单位坐标(二次贝塞尔已展平),4×4 超采样出灰度蒙版,再按 `floor` 对齐铺满整格 —— 段与段之间**不会漏出一条背景色的缝**,圆头不会被拉成椭圆,换字体也不变形;Oh My Posh 的 powerline / diamond 主题逐格对齐 wezterm
 - 半块与象限块(`▄▀█▌▐▖▗`)按格子几何直接填矩形,**上下行之间没有横缝**
 - 中英混排按 em 归一,汉字之间不留"空格缝";Nerd Font 图标自动发现并排在文本回退之前
 - 自定义背景:壁纸 / 模糊 / 渐变 / 五种填充 / 半透明(配置项名对齐 wezterm);GPU 后端逐像素 alpha,只有背景变淡
@@ -133,6 +146,7 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 - 自定义键位可拆成独立 Lua 文件,配置里用 `keys_file = "vim.lua"`(或复数 `keys_files`)引用;外部文件是**基础层**、配置内联 `keys` 是**覆盖层**,两层都没写出来的组合键一律**退回终端内置默认键位**——只改想改的键即可。配置管理器顶部「键位方案」下拉一键切换、「新建键位文件」按钮一键生成并引用、「键位映射」分组增删自定义键位,见 [手册 §15.11](docs/config-manual.md#1511-键位方案文件keys_file)
 - 窗口尺寸与字号**解耦**:`window_width` / `window_height` 写**物理像素**即按像素开窗(125% 缩放下写 1300 就是 1300 像素宽),之后调 `font.size` 窗口纹丝不动(用 `initial_cols/rows` 按格数反推时,改字号会连带改窗口大小);启动日志会打印「初始窗口尺寸来源」,见 [手册 §7.2](docs/config-manual.md#72-初始窗口尺寸)
 - 去掉 Windows 顶部标题栏:`window_decorations = "INTEGRATED_BUTTONS|RESIZE"` 把最小化/最大化/关闭画进标签栏,或 `"RESIZE"` 只留自绘缩放热区;简写 `window_titlebar = false` 效果相同,见 [手册 §7.4](docs/config-manual.md#74-简写-window_titlebar)
+- 开 / 关窗有动画:淡入 + 从 96.5% 涨到 100%(160ms,关窗 120ms),和系统自己的窗口动画一个节奏。逐像素透明走 GPU 着色器(缩放只动顶点、不改窗口尺寸,提示符不会重排;毛玻璃跟着一起淡),不透明后端走窗口级 `LWA_ALPHA`;系统「动画效果」关掉时一律不动。`window_animation` / `window_animation_ms` 可调,见 [手册 §7.6](docs/config-manual.md#76-开窗--关窗动画)
 - 标签栏右侧可挂**自定义状态栏**:内置 DeepSeek 主题已带上「时段问候语 + 时钟 + 日期 + 电量 + 签名」,颜色跟随主题;用 `wezterm.on('update-right-status')` + `wezterm.format()` + `wezterm.battery_info()` + `wezterm.nerdfonts` 写,见 [手册 §8.7](docs/config-manual.md#87-状态栏左边一条右边一条)
 - 状态栏文字还是由脚本(`update-right-status`)决定,但**外观可以在配置里单独调**:`status_bar` 一组键管字号(`font_scale`)、整条栏高度(`height`)、左右留白(`padding`)、片段间距(`item_spacing`)和空格宽度(`space_width`,脚本里小点两侧的空隙就是空格,调小即可收紧切片),配置管理器「状态栏」分组拖滑杆即可,见 [手册 §8.7](docs/config-manual.md#87-状态栏左边一条右边一条)
 - 文件浏览器:命令面板 `/files` 打开**铺满当前窗格**的列表(路径就是 shell 的 cwd),`Ctrl+Shift+E` 从左边分出**侧边栏**;面板**属于某个 pane** —— 在哪个终端打开就只铺那个 pane,点到另一个终端会连列表带 cwd 一起移交;**目录双向同步** —— 终端里 `cd` 面板跟着走,面板里进目录会给终端写一行 `cd`(开关 `files_gui.follow_cwd` / `push_cwd`,默认都开;PowerShell 靠自动注入的 prompt 钩子上报 OSC 7,cmd 靠读进程工作目录);方向键 / 鼠标选目录,回车默认**另开一个窗口**用 `nvim` / `vim`(可自定义)打开文件,也能改成右侧分屏或当前终端的 shell(见 `files_gui.open_mode`);编辑器找不到时面板底部给英文提示,见 [手册 §15.10](docs/config-manual.md#1510-文件浏览器)
@@ -237,7 +251,7 @@ CPU 14.5 ms、p95 19 ms,会偶发掉帧。冷启动首帧 GPU 580 ms / 峰值 48
 **吞吐不在终端软件这一层。** 同一台机器、同一段输出,五方端到端实测(Kitty / Ghostty /
 WezTerm / Windows Terminal / VectorTerm)全部落在 **1.37–1.85 MiB/s**;只读的 ConPTY 管道
 (不渲染)也只有 0.94 MiB/s,而生成端直接写 NUL 能跑到 40 MiB/s —— 天花板是 ConPTY / conhost,
-不是渲染器。完整口径、原始 CSV 与一键复现脚本见 [benchmark/README.md](benchmark/README.md)。
+不是渲染器。完整口径、原始 CSV 与一键复现脚本见 [docs/benchmark/README.md](docs/benchmark/README.md)。
 
 ## 配置示例
 
@@ -311,9 +325,10 @@ VectorTerm/
 ├── config.example.lua   全部可选项(注释版)
 ├── VectorTermLogo.png       图标母版(1080×1080,tools/gen_icons.py 的输入)
 ├── assets/icons/        由母版生成的分辨率梯子 + VectorTerm.ico(exe 图标)
-├── assets/              截图(screenshot.png:deepseek.lua 主题下的真实启动首屏)
+├── assets/              截图(screenshot.png:deepseek-glass-minimal 下的真实首屏;
+│                        screenshot-deepseek.png:deepseek.lua 的完整界面)
 ├── docs/                设计文档与原理剖析
-├── benchmark/           性能报告 + 原始 CSV + 一键复现脚本
+├── docs/benchmark/      性能报告 + 原始 CSV + 一键复现脚本
 ├── tools/               辅助脚本(gen_icons.py:图标分辨率梯子 / gen_nerdfonts.py)
 ├── tools/diagnostics/   可复现的诊断与截图脚本(已入库;主题实机回归、图片光标定位、
 │                        README 头图、文档链接审计等),见 docs/build.md 的验证章节
@@ -366,7 +381,7 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 | [docs/layout.md](docs/layout.md) | **目录地图**:每个目录是什么、19 GB 的 `target/` 由哪些东西构成、想瘦身按什么顺序删;附 31 个 `src` 模块职责表 |
 | [docs/dependencies.md](docs/dependencies.md) · [docs/limitations.md](docs/limitations.md) | 依赖选型、已知限制 |
 | [docs/kitty-image-cursor-rca.md](docs/kitty-image-cursor-rca.md) | kitty 图片与 fastfetch 首行输入错位的完整定位(PTY 字节 / 上游源码 / 对照实验) |
-| [benchmark/](benchmark/README.md) | 性能报告、五方对比、复现脚本 |
+| [docs/benchmark/](docs/benchmark/README.md) | 性能报告、五方对比、复现脚本 |
 
 ## 致谢
 

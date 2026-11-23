@@ -12,9 +12,9 @@
 | `settings-gui/` | 配置管理器,独立 Rust + egui crate,与终端本体零耦合 | 314 KiB | 是 |
 | `vendor/` | 打过补丁的 `wgpu-hal`,经 `[patch.crates-io]` 接入 | 1.7 MiB | 是 |
 | `assets/` | 图标分辨率梯子 + `VectorTerm.ico` + 文档截图 | 439 KiB | 是 |
-| `docs/` | 14 篇设计文档与原理剖析(含本文件) | 319 KiB | 是 |
+| `docs/` | 14 篇设计文档与原理剖析(含本文件),外加 `docs/benchmark/` 性能报告目录 | 417 KiB | 是 |
 | `tools/` | 图标生成、Nerd Font 表生成、以及 `diagnostics/` 下 21 个诊断脚本 | 118 KiB | 是 |
-| `benchmark/` | 性能报告 + 原始 CSV + 一键复现脚本 | 98 KiB | 是 |
+| `docs/benchmark/` | 性能报告 + 原始 CSV + 一键复现脚本(报告正文在 `docs/` 里,数据在这里) | 98 KiB | 是 |
 | `config/` | `config.lua` 默认配置 + 四套内置主题(`deepseek`/`chatgpt`/`claude`/`gemini`) | 47 KiB | 是 |
 | `installer/` | Inno Setup 脚本(可选 PATH、App Paths、卸载清理) | 33 KiB | 是 |
 | 根目录文件 | `README.md`、`Cargo.toml`/`Cargo.lock`、`build.cmd`、`config.example.lua`、`VectorTermLogo.png`、两份许可证 | 450 KiB | 是 |

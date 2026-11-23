@@ -147,9 +147,14 @@ return {
   -- window_background_fill = "cover",
 
   -- 不透明度 0..1:1 = 不透明,0.85 能隐约透出背后的窗口
-  -- 实现方式是"层叠窗口 + 统一 alpha",整块窗口(含文字)一起变淡,
-  -- CPU / GPU 两个后端都支持。详见 docs/custom-background.md
+  -- 有毛玻璃 / 逐像素 alpha 时只有**背景层**变淡,文字保持实心;
+  -- 不透明后端退回"整块窗口连文字一起淡"。
   -- window_background_opacity = 0.85,
+
+  -- 单元格**自设**底色的不透明度 0..1(默认 1.0 = 原色)。
+  -- oh-my-posh 的 powerline 色块、反显、ls 的目录色都算"单元格自设底色",
+  -- 整窗半透明时它们默认仍是原色;想让它们一起变透再调这项。
+  -- text_background_opacity = 1.0,
 
   -- 渐变(图片存在时画在图片下面,图片半透明时才透得出来)
   -- window_background_gradient = {
@@ -158,9 +163,10 @@ return {
   -- },
 
   -- Win11 系统背板(毛玻璃):none(默认)/ mica / acrylic / tabbed
-  -- 目前只解析不生效:材质要靠"窗口客户区对 DWM 逐像素透明"才透得出来,
-  -- 而窗口交换链(CreateSwapChainForHwnd)不接受预乘 alpha。配了会在
-  -- 启动日志里提示。半透明请用 window_background_opacity。
+  -- 真磨砂:窗口交换链改成 DirectComposition 合成交换链,拿到逐像素 alpha,
+  -- 只有背景变透明、文字保持实心;窗口失焦时材质也不会掉(wezterm 的老毛病
+  -- 在这里修掉了)。需要 GPU 后端:render = "auto" / "gpu"。
+  -- 现成配方见 config/deepseek-glass.lua(55% 背景 + Acrylic)。
   -- win32_system_backdrop = "acrylic",
 
   -- 双显卡机器上先挑哪块 GPU(改这一项需要重启)
@@ -245,6 +251,24 @@ return {
   -- 样式:"Windows"(默认,方形图标)/ "Gnome"(圆形按钮底)
   -- integrated_title_button_style = "Windows",
 
+  -- 开 / 关窗动画:淡入 + 从 96.5% 涨到 100%,和系统自己的窗口动画同节奏。
+  -- 缩放只动顶点、不改窗口尺寸,提示符不会重新折行;首帧才开始计时,所以
+  -- 不会因为 shell 启动慢就把动画"跳过"。系统「动画效果」关掉时自动不动。
+  -- window_animation = true,
+  -- window_animation_ms = 160,      -- 关窗用 0.75 倍;超过 300 会觉得启动"肉"
+
+  -- 失焦白边(详见手册 §12):只在"没有标题栏、也没有标签栏"的极简窗口里有意义 ——
+  -- 那种窗口没有系统提示"现在是不是激活的",打了一半的字可能进了别的窗口。
+  -- focus_border = {
+  --   enabled = true,
+  --   width = 1.0,             -- 逻辑像素,夹到 0–8;0 = 关闭
+  --   radius = 8.0,            -- 与 DWM 窗口圆角对齐,最大化时自动变直角
+  --   color = "#FFFFFF",       -- "none" 也等于关闭
+  --   opacity = 0.9,           -- 淡入完成后的线条不透明度
+  --   fade_in_ms = 220,        -- 失焦 → 亮起来
+  --   fade_out_ms = 140,       -- 拿回焦点 → 收回去(比淡入快)
+  -- },
+
   -- 状态栏刷新间隔(毫秒,夹到 50~60000);update-status / update-right-status
   -- 按这个节奏派发。不写 = 1000。
   -- status_update_interval = 1000,
@@ -283,6 +307,9 @@ return {
     show_new_tab_button = true,
     -- 每个标签右侧的 "×" 关闭按钮。标签被挤到放不下标题时会自动隐藏
     show_close_button = true,
+    -- 无边框模式下标签栏顺带当拖动条用。false = 连那条空白拖动条也不要,
+    -- 窗口里只剩终端(极简玻璃配方就是这么配的,见 deepseek-glass-minimal.lua)
+    keep_as_title_bar = true,
     -- 标签圆角半径(像素)。不写 = 按标签栏高度自动(约 8px);
     -- 0 = 直角;太大时自动夹到标签栏高度的一半以内。仅 fancy = true 生效
     -- corner_radius = 8,

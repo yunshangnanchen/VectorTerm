@@ -50,7 +50,7 @@ CPU 后端(`paint_cpu`)读这份列表做逐像素 alpha 混合,GPU 后端(`gpu.
 
 真实窗口 1920×1080 满屏:GPU 帧间隔稳定 3.33 ms(受 DXGI 提交节流;显示器 60Hz 时用户看到的是 60 FPS),CPU 14.5 ms 且 p95 达 19 ms,会偶发掉帧。代价在别处:**冷启动首帧 GPU 580 ms / CPU 112 ms,峰值内存 GPU 485 MB / CPU 55 MB**。
 
-完整实测数据、口径说明(逐帧同步伪影、debug 数字不可比、ConPTY 未完成项)与优化优先级见 [`benchmark/vectorterm-performance-benchmark.md`](../benchmark/vectorterm-performance-benchmark.md)。全部报告、原始 CSV、基准配置与一键复现脚本统一放在 [`benchmark/`](../benchmark/README.md);本机复现:`powershell -ExecutionPolicy Bypass -File benchmark\run.ps1`。
+完整实测数据、口径说明(逐帧同步伪影、debug 数字不可比、ConPTY 未完成项)与优化优先级见 [`benchmark/VectorTerm-performance-benchmark.md`](benchmark/VectorTerm-performance-benchmark.md)。全部报告、原始 CSV、基准配置与一键复现脚本统一放在 [`benchmark/`](benchmark/README.md);本机复现:`powershell -ExecutionPolicy Bypass -File docs\benchmark\run.ps1`。
 
 ## 配置
 

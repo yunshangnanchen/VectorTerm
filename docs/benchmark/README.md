@@ -9,6 +9,7 @@ benchmark/
 ├── README.md                          本文件
 ├── terminal-performance-report.md     网络横评:wezterm / ghostty / kitty(15 个公开来源)
 ├── vectorterm-performance-benchmark.md    VectorTerm 本机 release 实测报告
+├── glass-startup-performance.md       毛玻璃(deepseek-glass)启动拆解 + 优化方案
 ├── configs/
 │   ├── bench-gpu.lua                  真实窗口:GPU / DX12 + 满屏彩色文本
 │   ├── bench-cpu.lua                  真实窗口:CPU 软渲染 + 同一份文本
@@ -18,6 +19,7 @@ benchmark/
 │   ├── bench-parse.csv                VT 解析吞吐原始数据
 │   ├── profile-window-full.txt        真实窗口帧率矩阵(2 尺寸 × 2 后端 × 3 次)
 │   ├── startup-measurements.txt       冷启动首帧 / 后端名
+│   ├── glass-startup-2026-11-22.txt   毛玻璃:启动分阶段 / 帧率 / 内存 / 配色原始数据
 │   └── .gitignore                     生成的素材与运行日志不入库
 ├── run.ps1                            Windows 一键复现(含冷启动与内存采样)
 └── run.sh                             Git Bash 精简版

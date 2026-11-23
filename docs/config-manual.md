@@ -320,8 +320,11 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 > 时是整窗 alpha,文字会跟着一起变淡,日志里会写
 > `背板 acrylic:整窗 alpha(文字一起变淡)`。
 
-配色也顺带提了一档(`foreground` `#F2F6FF`、`cursor_bg` / `ansi[4]` `#5B7CFF`),
-玻璃背景下对比度不够会发灰。
+配色也顺带提了一档(`foreground` `#F0F2F5`、`cursor_bg` / `ansi[4]` `#5B7CFF`),
+玻璃背景下对比度不够会发灰。底色用**中性石墨灰**(`window_background_color = "#15181D"`,
+渐变 `#1F2227 → #101215`)而不是 deepseek 的夜空蓝:蓝底透出 45% 桌面后整窗发蓝
+(实测窗口内空白 `RGB(42,46,57)`、色相 220°、饱和度 29%、蓝偏 `+13`,桌面本身才 `+5`),
+灰底在同一位置把蓝偏压到 `+4` 左右,色相不再往蓝跑。
 
 #### 极简变体:`deepseek-glass-minimal.lua`
 
@@ -332,7 +335,7 @@ Claude 是暖橙、Gemini 直接走 蓝 → 紫 → 粉 的品牌渐变,ChatGPT 
 | `window_decorations` | `"RESIZE"` | 没有系统标题栏,也没有 `INTEGRATED_BUTTONS` 的三枚按钮;四边四角仍可拖拽缩放 |
 | `tab_bar.enable` | `false` | 不画标签 |
 | `tab_bar.keep_as_title_bar` | `false` | **连那条"兼任标题栏"的空白条也不要**(见 [§8.2](#82-enable--at_bottom--hide_if_one)) |
-| `focus_border.enabled` | `true` | 失焦时淡入一圈 2px 白边(见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
+| `focus_border.enabled` | `true` | 失焦时淡入一圈 1px 白边(见 [§13.7](#137-focus_border失焦时的一圈细白边)) |
 | `focus_border.fade_in_ms` | `220` | 缓入;拿回焦点时 `fade_out_ms = 140` 收回去 |
 
 没有标题栏以后:鼠标移到**窗口顶部一条**(与标签栏等高、光标变抓手)按住左键即可拖,
@@ -962,7 +965,40 @@ window_decorations = "RESIZE"                 -- 同上,推荐这种写法
 系统自动不圆。**Windows 10 没有圆角能力,该项无效果**。有系统标题栏时保持 `Default`,
 跟随系统 / 用户的全局圆角设置。
 
-### 7.6 标签栏里的窗口按钮
+### 7.6 开窗 / 关窗动画
+
+| 键 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `window_animation` | 布尔 | `true` | 启动 / 关闭时的"淡入 + 微放大"进场动画 |
+| `window_animation_ms` | 数字 | `160` | 动画时长(毫秒),取值夹在 `0..600`;关窗用它的 **0.75 倍** |
+
+Windows 的窗口动画本来就是"淡 + 从 96.5% 涨到 100%",这里照做,分两条路落地:
+
+* **逐像素透明**(`win32_system_backdrop` 毛玻璃,或 `window_background_opacity < 1`)
+  走 GPU 顶点 / 片元着色器:`zoom` 把顶点绕窗口中心缩放,**不改窗口尺寸** ——
+  改尺寸会让行列重算、提示符重新折行,看起来是"终端被挤窄"而不是"窗口涨开";
+  `fade` 同时乘到预乘色和清屏色上,DWM 按 alpha 合成,连毛玻璃一起淡。
+* **不透明后端** 走窗口级 `WS_EX_LAYERED` + `LWA_ALPHA`:整块窗口一起淡,
+  放完就摘掉分层位(你配的 `window_background_opacity` 会还回去)。
+
+```lua
+window_animation = true
+window_animation_ms = 160   -- 再快就看不出;超过 300 会觉得启动"肉"
+```
+
+两个必须知道的点:
+
+1. **系统「动画效果」关掉时一律不动**。读的是
+   `SPI_GETCLIENTAREAANIMATION`(设置 → 辅助功能 → 视觉效果),用户既然关了
+   动画,这里就不能自作主张 —— 哪怕我们觉得自己的动画更好看。
+2. **首帧才起跑**。进程启动到第一帧之间要 spawn shell、attach pty,这段
+   时间不算进淡入进度;否则窗口还没露脸动画就已经放完了,用户看到的还是
+   "一下蹦出来"。
+
+排查用 `VECTORTERM_ANIM_TRACE=1`:每个动画帧往 stderr 打一行
+`t / v / zoom / per_pixel / closing`,能直接看出是没跑、跑偏还是被提前掐断。
+
+### 7.7 标签栏里的窗口按钮
 
 只有 `INTEGRATED_BUTTONS` 生效时才画。**关掉按钮只是不画按钮,顶部那条栏还在,
 照样能拖动窗口**,不会连带把标签栏一起去掉。
@@ -993,11 +1029,14 @@ integrated_title_button_style = "Gnome"
 按钮尺寸是标准的 46 逻辑像素(随 DPI 缩放),悬停高亮、关闭悬停变红,
 最大化后图标自动变成"还原"双框。
 
-### 7.7 生效时机
+### 7.8 生效时机
 
 这一组都是**窗口创建时**决定的,**改完要重启**:
 `window_decorations` / `window_titlebar` / `window_rounded_corners` /
 `integrated_title_*` / `initial_cols` / `initial_rows` / `padding`。
+
+`window_animation` / `window_animation_ms` 是例外:热重载即生效,下一次开 / 关窗
+就用新值(当前正在播的那一次不会中途变速)。
 
 ---
 
@@ -2022,7 +2061,9 @@ focus_border = {
 
 **为什么默认是关的:** 有系统标题栏的窗口本来就有激活态高光,再加一圈白边是重复的。
 它只对"完全自绘边框"的极简配方有意义 —— `config/deepseek-glass-minimal.lua` 就是
-为它配的。
+为它配的。CPU 与 GPU 后端共用同一套"外圈覆盖率减内圈覆盖率"的算法,四边等宽;
+CPU 后端早期只在四角行做减法,中间行把竖边整条填满,看起来像左右各贴了一条长条,
+现在已修正。
 
 **缓存入的做法:** 淡入和淡出都走 ease-out(先快后慢),但淡出更快 —— 失焦时边"亮起来"
 要有一点过程,拿回焦点时还在慢慢收会显得迟钝。补间是**纯时间函数**(按已过时间算进度,
@@ -2810,6 +2851,7 @@ keys = {
 | `exit_behavior` | 同名(`"Close"` / `"Hold"`) |
 
 VectorTerm 自己扩展的项(wezterm 没有同名):`window_rounded_corners`、
+`window_animation` / `window_animation_ms`、
 `live_resize_mode`、`resize_debounce_ms`、`tab_bar_edge_padding`、`tab_bar_top_padding`、
 `tab_bar.show_close_button`、`images.*`、`cursor.*`、`scroll.*`、`render`、`gpu_power`、
 `session_log`、`quit_confirmation`、`window_background_blur`。
@@ -2955,10 +2997,24 @@ return {
   window_decorations     = "TITLE|RESIZE",  -- TITLE | RESIZE | INTEGRATED_BUTTONS | NONE
   -- window_titlebar     = true,            -- 简写:只改"有无系统标题栏"
   window_rounded_corners = true,            -- 无边框时向 DWM 要 Win11 圆角
+  -- window_animation     = true,           -- 开 / 关窗的淡入 + 微放大(§7.6)
+  -- window_animation_ms  = 160,            -- 时长(毫秒),关窗用 0.75 倍
   integrated_title_buttons          = { "Hide", "Maximize", "Close" },
   integrated_title_button_alignment = "Right",    -- "Right" | "Left"
   integrated_title_button_color     = "Auto",     -- "Auto" 或颜色
   integrated_title_button_style     = "Windows",  -- "Windows" | "Gnome"
+
+  -- ===================== 失焦白边 =====================
+  -- 只在没有标题栏、也没有标签栏的极简窗口里有意义,详见 §12。
+  focus_border = {
+    enabled     = false,                    -- 总开关
+    width       = 1.0,                      -- 逻辑像素,夹到 0–8;0 = 关闭
+    radius      = 8.0,                      -- 与 DWM 窗口圆角对齐,最大化时自动变直角
+    color       = "#FFFFFF",                -- 颜色,"none" 也等于关闭
+    opacity     = 0.9,                      -- 淡入完成后的线条不透明度
+    fade_in_ms  = 220,                      -- 失焦 → 亮起来
+    fade_out_ms = 140,                      -- 拿回焦点 → 收回去(比淡入快)
+  },
 
   -- ===================== 标签栏 =====================
   status_update_interval = 1000,           -- 状态栏回调派发间隔(ms),夹到 50–60000
@@ -2971,6 +3027,7 @@ return {
     show_index          = true,
     show_new_tab_button = true,
     show_close_button   = true,
+    keep_as_title_bar   = true,             -- 标签栏兼作拖动条;false = 无边框时连它也不要
     -- corner_radius = 8,                   -- 像素,0 = 直角,不写按高度自动
     -- edge_padding  = 10,                  -- 逻辑像素,0 = 贴边
     -- top_padding   = 10,                  -- 逻辑像素,0 = 贴边
@@ -2991,7 +3048,8 @@ return {
   },
 
   -- ===================== 分屏分割线 =====================
-  -- 不写这一节 = 自动间距 + 3px 细线。详见 §15.8  split_divider = {
+  -- 不写这一节 = 自动间距 + 3px 细线。详见 §15.8
+  split_divider = {
     enabled     = true,
     -- thickness   = 2,                -- 不写 = 自动 3px 细线;0 = 隐藏;单位 px
     -- gap         = "Auto",          -- 缝宽;不写 = 线宽 + 2px(文字到线 1px)
@@ -3344,6 +3402,8 @@ VectorTerm.exe --config "%USERPROFILE%\.config\VectorTerm\current\deepseek.lua"
 | `window_decorations` | `"TITLE\|RESIZE"` |
 | `window_titlebar` | 无(简写,只覆盖“有无系统标题栏”这一维) |
 | `window_rounded_corners` | `true` |
+| `window_animation` | `true` |
+| `window_animation_ms` | `160` |
 | `integrated_title_buttons` | `{ Hide, Maximize, Close }` |
 | `integrated_title_button_alignment` | `"Right"` |
 | `integrated_title_button_color` | `"Auto"` |

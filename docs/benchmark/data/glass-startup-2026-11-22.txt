@@ -1,0 +1,61 @@
+# 毛玻璃启动 / 帧率 / 内存原始数据(2026-11-22)
+# 机器:Intel Core Ultra 7 258V / Intel 核显 / Win11 / 125% / 1250x750
+# exe: build.cmd build --release(22:44),同源含 347 项测试
+# 采样:VECTORTERM_PROFILE_FRAMES + 日志毫秒时间戳;脚本分别跑 3 次
+# 结论与解读见 ../glass-startup-performance.md
+#
+# 字段:window=建窗+字体度量就绪 / backend=GPU 后端(设备+交换链+管线)就绪
+#       first=程序内首帧计时 / frames=p50 与 fps(VECTORTERM_PROFILE_FRAMES)
+# ---------------------------------------------------------------------------
+# [A] CPU 软渲染(config/deepseek.lua,render = "cpu")
+# run1  window=658ms  backend=CPU  first=777.8ms   frames p50=1.842ms fps=248.3
+# run2  window=682ms  backend=CPU  first=732.5ms   frames p50=1.599ms fps=276.8
+#
+# [B] GPU 不透明(deepseek.lua 改 render = "auto",无背板)
+# run1  window=875ms  backend=2113ms  first=2228.2ms  frames p50=3.838ms fps=224.3
+# run2  window=802ms  backend=1802ms  first=1925.2ms  frames p50=4.609ms fps=191.9
+# run3  window=810ms  backend=1789ms  first=1909.8ms  frames p50=4.217ms fps=180.1
+# 200 帧: run1 mean=4.863 p50=3.794 p95=8.572 fps=205.6
+#          run2 mean=4.513 p50=3.478 p95=7.226 fps=221.6
+#
+# [C] GPU + Acrylic 背板但窗口不透明(glass 改 backdrop="none",opacity=1.0)
+#       —— 用来隔离"材质"本身的开销
+# run1  window=804ms  backend=1773ms  first=1881.6ms
+# run2  window=784ms  backend=1795ms  first=1909.3ms
+# run3  window=819ms  backend=1872ms  first=1981.3ms
+#
+# [D] 毛玻璃(config/deepseek-glass.lua,Acrylic + opacity 0.55 + DComp)
+# run1  window=1500ms  backend=2146ms  first=2325.5ms  frames p50=5.958ms fps=172.8
+# run2  window=1395ms  backend=2018ms  first=2209.8ms  frames p50=6.985ms fps=141.8
+# run3  window=1391ms  backend=2082ms  first=2318.6ms  frames p50=6.272ms fps=151.5
+# 200 帧: run1 mean=5.445 p50=4.143 p95=10.530 fps=183.7
+#          run2 mean=5.828 p50=5.993 p95=10.507 fps=171.6
+# first_frame_ms(200 帧那轮)= 2393.1 / 2276.7
+#
+# [E] 极简毛玻璃(config/deepseek-glass-minimal.lua)
+# run1  window=1270ms  backend=2016ms  first=2190.8ms  frames p50=6.481ms fps=151.0
+#
+# [F] 常驻内存(GetProcessMemoryInfo,进程启动后 1.5s / 4s / 8s)
+# CPU       WS=79MB  Priv=50MB   -> 82MB / 52MB  -> 82MB / 52MB
+# GPU 不透明 WS=474MB Priv=483MB -> 561MB / 565MB -> 553MB / 549MB
+# 毛玻璃     WS=128MB Priv=142MB -> 562MB / 564MB -> 559MB / 551MB
+# 极简玻璃   WS=136MB Priv=170MB -> 551MB / 554MB -> 547MB / 541MB
+#
+# 读法:玻璃与"GPU 不透明"的差异 = 材质 + 逐像素 alpha 的真实成本
+#       ([D]-[C] 首帧约 +0.1s、每帧 +1~2ms);[B]-[A] 是 GPU 后端本身的代价。
+#
+# [G] 配色(窗口内空白像素均值,改色前后同一位置)
+# 改前 (42,46,57) hue 220.5 sat 28.6% blueness +13.0   [窗口外桌面 (31,29,35) +5.0]
+# 改后 (27,30,32) hue 202.3 sat 13.6% blueness  +3.5
+#
+# [H] 同一批采样重跑(驱动 PSO/着色器缓存已预热,系统空闲)——
+#     用来把"设备/交换链"与"管线"分开,三分段都取自日志时间戳
+# glass run1  window=1206ms  呈现模式=1771ms  渲染后端=1808ms  first=1982ms
+# glass run2               呈现模式=1760ms  渲染后端=1795ms  first=1964ms
+# glass run3               呈现模式=1812ms  渲染后端=1847ms  first=2020ms
+#   -> 设备+DComp+configure ≈ 0.55s;图集+缓冲+2 条管线 ≈ 0.04s;首帧 ≈ 0.17s
+#
+# [I] 启动基线(与后端无关的那段:配置求值 + 建窗 + Renderer::new)
+# config/config.lua (render=cpu)  window=575ms first=659ms
+# config/config.lua (render=cpu)  window=561ms first=642ms
+# config/deepseek.lua (render=cpu)window=658ms first=778ms   <- 多一份状态栏脚本+主题合并
