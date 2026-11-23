@@ -242,6 +242,11 @@ return {
   -- 想要原生标题栏就改成 "TITLE|RESIZE";只去掉标题栏、不要按钮用 "RESIZE"。
   window_decorations = "RESIZE",
   window_rounded_corners = true,
+  -- ── 开 / 关窗动画:淡入 + 96.5%→100% 微放大,和系统自己的窗口动画同节奏 ──
+  -- 缩放只动顶点、不改窗口尺寸,提示符不会重新折行。首帧才开始计时,
+  -- 所以不会因为 shell 启动慢就把动画"跳过"。系统「动画效果」关掉时自动不动。
+  -- window_animation = true,
+  -- window_animation_ms = 160,   -- 关窗用 0.75 倍;超过 300 会觉得启动"肉"
   window_width = 1250,
   window_height = 750,
 

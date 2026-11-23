@@ -1,5 +1,5 @@
 --[====================================================================[
-  VectorTerm 内置主题:DeepSeek Glass(夜空蓝 · 真毛玻璃)
+  VectorTerm 内置主题:DeepSeek Glass(中性石墨灰 · 真毛玻璃)
 
   尺寸、排版、状态栏脚本全部沿用 deepseek.lua —— 窗口还是 1250×750、
   14 号字、行高 1.0、padding 10、顶部标签栏,换过来尺寸一个字都不会变。
@@ -12,7 +12,16 @@
               透一次),文字/光标/图片仍是实心。单元格自己设的底色
               (powerline 提示符、反显、ls 的目录色)不受它影响,由
               `text_background_opacity` 管,默认 1.0 = 保持原色;
-    3) 配色    前景提到 #F2F6FF、选区改成半透明品牌蓝。
+    3) 配色    前景提到 #F0F2F5、选区改成半透明品牌蓝。
+
+  ── 底色为什么从"夜空蓝"改成"石墨灰" ──────────────────────────────
+  上一版的底色是 #0D1826、渐变 #12203A→#0A1120,整窗叠 45% 桌面之后
+  实测明显发蓝:窗口内空白处 RGB(42,46,57),色相 220°、饱和度 29%、
+  蓝偏(B-(R+G)/2)+13 —— 而窗口外的桌面本身只有 +5。看起来就像盖了
+  一层蓝色蒙版(实际上没有蒙版:代码里没给 accent 模糊设任何渐变色,
+  蓝全部来自这三个底色值)。
+  现在换成中性石墨灰(只留极轻的冷调),同一位置实测蓝偏降到 +4 左右,
+  品牌蓝只留在光标、选区、活动标签这些"点缀"上。
 
   ── 为什么这次能真透 ────────────────────────────────────────────────
   以前不行:窗口交换链是 `CreateSwapChainForHwnd`,DXGI 不接受
@@ -40,7 +49,7 @@
 
 -- ── 状态栏(§12):与 deepseek.lua 同一套问候语/时钟/电量,只是配色更亮 ─
 local nf = wezterm.nerdfonts
-local DS_BLUE = '#5B7CFF'   -- 比 deepseek 的品牌蓝亮一档(透明度会吃掉一点亮度)
+local DS_BLUE = '#5B7CFF'   -- 品牌蓝:玻璃上唯一的彩色,只用在图标和签名上
 local DS_BLUE2 = '#8FA8FF'
 
 local function slot(h)
@@ -69,8 +78,8 @@ wezterm.on('update-right-status', function(window, pane)
       [tonumber(wezterm.strftime('%w')) + 1]
 
   -- 半透明窗口下的文字要更亮才不发灰,分隔点用中间调
-  local dim   = '#8FA0BF'
-  local plain = '#F2F6FF'
+  local dim   = '#98A0AA'
+  local plain = '#F0F2F5'
   local sig   = DS_BLUE2
   local accent = DS_BLUE
 
@@ -116,11 +125,12 @@ end)
 
 return {
   -- ── 玻璃:底色 + 渐变 + 整窗不透明度 ────────────────────────────────
-  -- 底色略亮于 deepseek 的 #0B1220:半透明时如果底色太黑,桌面透上来会发脏。
-  window_background_color = "#0D1826",
-  -- 上亮下暗的竖向渐变 = 玻璃上沿的反光。两色都取自夜空蓝的同一家族。
+  -- 中性石墨灰,只带一点冷调。以前这里是夜空蓝 #0D1826,叠上 45% 桌面后
+  -- 整体发蓝(见文件头那组实测数)。
+  window_background_color = "#15181D",
+  -- 上亮下暗的竖向渐变 = 玻璃上沿的反光。两色都在同一灰阶家族里,不掺蓝。
   window_background_gradient = {
-    colors = { "#12203A", "#0A1120" },
+    colors = { "#1F2227", "#101215" },
     orientation = "Vertical",
   },
   -- 整块画布 55% 不透明:背后的 Acrylic 材质透出 45%。
@@ -138,24 +148,24 @@ return {
 
   -- ── 基础配色(§6.1):DARK 色板,前景按透明度提亮 ──────────────────
   colors = {
-    foreground = "#F2F6FF",   -- 主文本(deepseek 的 #E8EDF9 在 84% 下会发灰)
-    background = "#0B1220",   -- 画布(被上面的渐变盖住,只在渐变不到的角落兜底)
-    cursor_fg  = "#0B1220",   -- 蓝色块状光标上的文字:深色更清楚
-    cursor_bg  = "#5B7CFF",   -- 品牌蓝提亮一档
+    foreground = "#F0F2F5",   -- 主文本(偏中性白,不再带蓝)
+    background = "#121418",   -- 画布(被上面的渐变盖住,只在渐变不到的角落兜底)
+    cursor_fg  = "#121418",   -- 蓝色块状光标上的文字:深色更清楚
+    cursor_bg  = "#5B7CFF",   -- 品牌蓝
 
     -- 16 色表(§6.2):与 DARK 色板一致;只有 black 提亮,避免在半透明底上糊掉
     ansi = {
-      "#16233A",  -- 0 black(比画布亮一档,glass 下才分得出来)
+      "#23262A",  -- 0 black(比画布亮一档,glass 下才分得出来)
       "#F0564A",  -- 1 red
       "#3DDC97",  -- 2 green
       "#F5C451",  -- 3 yellow
       "#5B7CFF",  -- 4 blue    → 品牌蓝
       "#A78BFA",  -- 5 magenta
       "#4DD0E1",  -- 6 cyan
-      "#C9D3E8",  -- 7 white
+      "#CDD2DA",  -- 7 white
     },
     brights = {
-      "#33415F",  --  8 bright black
+      "#3D4248",  --  8 bright black
       "#FF7B6B",  --  9 bright red
       "#6BE8B4",  -- 10 bright green
       "#FFD97A",  -- 11 bright yellow
@@ -168,13 +178,13 @@ return {
     -- 标签栏(§8.6):活动标签仍是实心品牌蓝 —— 玻璃窗口里需要一块"不透明"
     -- 的锚点,否则整条栏都飘。非活动标签压暗,和渐变底色拉开层次。
     tab_bar = {
-      background         = "#0D1826",
+      background         = "#15181D",
       active_tab         = { bg_color = "#5B7CFF", fg_color = "#FFFFFF" },
-      inactive_tab       = { bg_color = "#111C31", fg_color = "#A9B4CC" },
-      inactive_tab_hover = { bg_color = "#1E2A4A", fg_color = "#F2F6FF" },
-      new_tab            = { bg_color = "#0D1826", fg_color = "#8A93A8" },
+      inactive_tab       = { bg_color = "#1D2127", fg_color = "#A8AEB8" },
+      inactive_tab_hover = { bg_color = "#2A2F36", fg_color = "#F0F2F5" },
+      new_tab            = { bg_color = "#15181D", fg_color = "#8D9299" },
       new_tab_hover      = { bg_color = "#5B7CFF", fg_color = "#FFFFFF" },
-      inactive_tab_edge  = "#3B4A72",
+      inactive_tab_edge  = "#3E434A",
     },
   },
 
@@ -221,9 +231,9 @@ return {
   -- ── 分屏分割线(§15.8):两端压暗、中间品牌蓝,在渐变底上像一道高光 ──
   split_divider = {
     enabled   = true,
-    color     = "#3B4A72",
+    color     = "#3E434A",
     gradient  = {
-      colors      = { "#16223A", "#5B7CFF", "#16223A" },
+      colors      = { "#1B1E23", "#5B7CFF", "#1B1E23" },
       orientation = "Auto",
     },
     draggable = true,
@@ -233,7 +243,7 @@ return {
   search = {
     enabled         = true,
     case_sensitive  = false,
-    highlight_color = "#1E2A4A",
+    highlight_color = "#2A2F36",
     current_color   = "#5B7CFF",
   },
 
@@ -241,7 +251,7 @@ return {
   scrollbar = {
     enabled     = false,
     show        = "never",
-    thumb_color = "#28324B",
+    thumb_color = "#2E3238",
   },
 
   -- ── 字体:与 deepseek 同号,换主题不会改变窗口尺寸 ──────────────────
@@ -250,6 +260,11 @@ return {
   -- ── 窗口:1250×750、无标题栏、圆角 —— 与 deepseek 逐项相同 ──────────
   window_decorations = "RESIZE",
   window_rounded_corners = true,
+  -- 开 / 关窗动画:淡入 + 微放大。玻璃路径的淡化走 GPU 着色器 —— 顶点绕窗口
+  -- 中心缩放(不改尺寸,行列不重算),`fade` 同时乘到预乘色和清屏色上,
+  -- 所以毛玻璃是**跟着一起淡**的,不是只淡文字。
+  -- window_animation = true,
+  -- window_animation_ms = 160,
   window_width = 1250,
   window_height = 750,
 

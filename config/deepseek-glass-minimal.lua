@@ -1,7 +1,7 @@
 --[====================================================================[
   VectorTerm 内置主题:DeepSeek Glass · 极简(只剩终端)
 
-  deepseek-glass.lua 的"减法版":同一套夜空蓝 + 真毛玻璃,但把所有非终端的
+  deepseek-glass.lua 的"减法版":同一套中性石墨灰 + 真毛玻璃,但把所有非终端的
   东西全部拿掉 —— 没有标签栏、没有窗口按钮、没有标题栏,窗口里从上到下
   只有滚动内容。透明背景下这一整块玻璃就是终端的形状。
 
@@ -30,8 +30,7 @@
     - 只在**失去焦点**时出现,拿回焦点就消失;
     - 淡入 220ms(ease-out),淡出 140ms —— 直接"啪"地出现太抢眼,
       淡进来才像玻璃的一部分;收回去要快,回来的时候得立刻有回应;
-    - 线宽 2 逻辑像素(比默认 1 粗一档,在玻璃上更看得清),圆角 8 与窗口
-      圆角对齐(最大化时自动变直角);
+    - 线宽 1 逻辑像素,圆角 8 与窗口圆角对齐(最大化时自动变直角);
     - `width = 0` 或 `enabled = false` 就是不要它。
 
   ── 玻璃那一层(与 deepseek-glass 完全相同)──────────────────────
@@ -39,6 +38,10 @@
   (清屏色 + 渐变 + 默认底色,叠几层也只透一次),文字/光标/图片仍是实心;
   单元格自设底色(oh-my-posh 提示符、反选、ls 目录色)由
   `text_background_opacity` 管,默认 1.0 保持原色。
+
+  底色是中性的石墨灰,不是蓝:玻璃叠在桌面上之后蓝偏只有 +4 左右,品牌蓝
+  只出现在光标/选区这些点缀上(上一版夜空蓝底色实测蓝偏 +13,见
+  deepseek-glass.lua 文件头)。
 
   这需要 GPU(DirectComposition 合成交换链);没有 GPU 的机器会退回软渲染,
   窗口保持不透明(而不是把文字一起压淡),日志里会说明。
@@ -48,10 +51,11 @@
 
 return {
   -- ── 玻璃:底色 + 渐变 + 整窗不透明度 ────────────────────────────────
-  window_background_color = "#0D1826",
+  -- 中性石墨灰(与 deepseek-glass 同一组值),不掺蓝
+  window_background_color = "#15181D",
   -- 上亮下暗的竖向渐变 = 玻璃上沿的反光
   window_background_gradient = {
-    colors = { "#12203A", "#0A1120" },
+    colors = { "#1F2227", "#101215" },
     orientation = "Vertical",
   },
   -- 画布 55% 不透明:背后的 Acrylic 材质透出 45%。文字不受影响。
@@ -64,23 +68,23 @@ return {
 
   -- ── 基础配色(§6.1):DARK 色板,前景按透明度提亮 ──────────────────
   colors = {
-    foreground = "#F2F6FF",
-    background = "#0B1220",
-    cursor_fg  = "#0B1220",
+    foreground = "#F0F2F5",
+    background = "#121418",
+    cursor_fg  = "#121418",
     cursor_bg  = "#5B7CFF",
 
     ansi = {
-      "#16233A",  -- 0 black(比画布亮一档,glass 下才分得出来)
+      "#23262A",  -- 0 black(比画布亮一档,glass 下才分得出来)
       "#F0564A",  -- 1 red
       "#3DDC97",  -- 2 green
       "#F5C451",  -- 3 yellow
       "#5B7CFF",  -- 4 blue    → 品牌蓝
       "#A78BFA",  -- 5 magenta
       "#4DD0E1",  -- 6 cyan
-      "#C9D3E8",  -- 7 white
+      "#CDD2DA",  -- 7 white
     },
     brights = {
-      "#33415F",  --  8 bright black
+      "#3D4248",  --  8 bright black
       "#FF7B6B",  --  9 bright red
       "#6BE8B4",  -- 10 bright green
       "#FFD97A",  -- 11 bright yellow
@@ -104,7 +108,7 @@ return {
   -- ── 失焦白边:细、淡、只在没焦点的时候在 ──────────────────────────
   focus_border = {
     enabled     = true,
-    width       = 2.0,      -- 逻辑像素;2 在毛玻璃上够明显,再粗就成"框"了
+    width       = 1.0,      -- 逻辑像素;细一点才像失焦提示,而不是给窗口装框
     radius      = 8.0,      -- 跟 DWM 窗口圆角对齐,最大化时自动变直角
     color       = "#FFFFFF",
     opacity     = 0.9,      -- 淡入完成后的不透明度:压在玻璃上是一道冷白细线
@@ -139,9 +143,9 @@ return {
   -- ── 分屏分割线(§15.8):两端压暗、中间品牌蓝 ──────────────────────
   split_divider = {
     enabled   = true,
-    color     = "#3B4A72",
+    color     = "#3E434A",
     gradient  = {
-      colors      = { "#16223A", "#5B7CFF", "#16223A" },
+      colors      = { "#1B1E23", "#5B7CFF", "#1B1E23" },
       orientation = "Auto",
     },
     draggable = true,
@@ -151,7 +155,7 @@ return {
   search = {
     enabled         = true,
     case_sensitive  = false,
-    highlight_color = "#1E2A4A",
+    highlight_color = "#2A2F36",
     current_color   = "#5B7CFF",
   },
 
@@ -159,7 +163,7 @@ return {
   scrollbar = {
     enabled     = false,
     show        = "never",
-    thumb_color = "#28324B",
+    thumb_color = "#2E3238",
   },
 
   -- ── 字体与留白 ───────────────────────────────────────────────────
@@ -174,6 +178,9 @@ return {
   -- 其余位置可用 Super + 左键拖。
   window_decorations    = "RESIZE",
   window_rounded_corners = true,
+  -- 开 / 关窗动画(淡入 + 微放大),玻璃路径由着色器淡,毛玻璃一起走。
+  -- window_animation = true,
+  -- window_animation_ms = 160,
   window_width  = 1250,
   window_height = 750,
 
