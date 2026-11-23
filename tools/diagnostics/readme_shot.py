@@ -97,6 +97,41 @@ def grab_window(pid, timeout=20.0):
     return 0
 
 
+def bring_to_front(hwnd) -> bool:
+    """把窗口顶到所有窗口之上,返回是否成功拿到前台。
+
+    只调 `SetForegroundWindow` 是不够的:Windows 只允许"当前前台进程"抢前台,
+    而从脚本里拉起来的程序通常拿不到这个许可,`ImageGrab` 抓到的就是**压在它上面
+    的别的窗口**(实测抓到过完全无关的一个程序)。这里两手一起上:
+
+    * `SetWindowPos(HWND_TOPMOST)` —— 置顶不依赖前台权限,至少保证没东西挡住;
+    * `AttachThreadInput` 把自己的输入队列挂到当前前台线程上,再
+      `SetForegroundWindow`,绕开前台锁。
+    """
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    SW_RESTORE = 9
+    HWND_TOPMOST = -1
+    SWP_NOSIZE, SWP_NOMOVE, SWP_SHOWWINDOW = 0x0001, 0x0002, 0x0040
+
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW)
+
+    fg = user32.GetForegroundWindow()
+    tid_fg = user32.GetWindowThreadProcessId(fg, None)
+    tid_self = kernel32.GetCurrentThreadId()
+    attached = bool(user32.AttachThreadInput(tid_fg, tid_self, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(tid_fg, tid_self, False)
+    time.sleep(0.5)
+    return user32.GetForegroundWindow() == hwnd
+
+
 def capture_screen(hwnd, out: pathlib.Path, wait_ms: int):
     """抓窗口矩形(含 DWM 合成后的毛玻璃)。
 
@@ -109,7 +144,15 @@ def capture_screen(hwnd, out: pathlib.Path, wait_ms: int):
     except Exception:
         ctypes.windll.user32.SetProcessDPIAware()
     user32 = ctypes.windll.user32
-    user32.SetForegroundWindow(hwnd)
+
+    for attempt in range(3):
+        if bring_to_front(hwnd):
+            break
+        print(f"没抢到前台,重试({attempt + 1}/3)", file=sys.stderr)
+    else:
+        # 拿不到前台也继续:置顶至少保证窗口没被别的程序盖住
+        print("警告:始终没拿到前台,截到的可能是窗口以外的内容", file=sys.stderr)
+
     time.sleep(wait_ms / 1000.0)
 
     client = wt.RECT()

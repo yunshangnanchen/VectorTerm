@@ -583,12 +583,20 @@ Set-PSReadLineOption -HistorySavePath "$env:TEMP\ps_history.txt"
 本节提到的所有探针 / 审计脚本都放在 **`tools/diagnostics/`**(随仓库提交,不随发行版分发)。
 以前它们散落在 `target/` 里,`cargo clean` 一跑就没了;现在统一从项目根目录执行
 `python tools/diagnostics/<脚本>.py`,输出截图 / 日志仍然写到 `target/`。
-`readme_shot.py` 是 README 头图的导帧脚本:用 `config/deepseek.lua` 主题 + 用户
-真实的 PowerShell 7 profile 启动,导出「打开后的第一屏」(fastfetch 立绘与系统信息
-+ oh-my-posh 提示符 + 主题状态栏),**不跑演示脚本、不模拟按键**。
-`python tools/diagnostics/readme_shot.py` 会覆盖 `assets/screenshot.png`;临时
-配置只写 `theme = "deepseek"`,窗口尺寸、shell、字体、状态栏全部继承主题
-(1250×750),不覆盖任何布局项。仅排查时可用 `README_SHOT_SIZE` 临时改尺寸。
+`readme_shot.py` 是 README 两张配图的导帧脚本:默认拍头图 `assets/screenshot.png`
+(主题 `deepseek-glass-minimal`,毛玻璃走屏幕抓图),加
+`--theme deepseek --out assets/screenshot-deepseek.png` 拍带标签栏 / 状态栏的那张
+(非玻璃主题走帧缓冲导出,不碰桌面、可复现)。两者都用用户真实的 PowerShell 7 profile
+启动,导出「打开后的第一屏」(fastfetch 立绘与系统信息 + oh-my-posh 提示符),**不跑演示
+脚本、不模拟按键**;临时配置只写 `theme = "<名字>"`,窗口尺寸、shell、字体、布局全部继承
+主题(1250×750),不覆盖任何布局项。
+
+> 屏幕抓图有两个坑:一是 `SetForegroundWindow` 对后台进程常被系统拒绝,抓到的会是**压在
+> 它上面的别的程序**(实测抓到过无关应用窗口)—— 现在先 `SetWindowPos(HWND_TOPMOST)`
+> 置顶、再用 `AttachThreadInput` 抢前台,并校验 `GetForegroundWindow`;二是必须用
+> `GetClientRect` + `ClientToScreen` 而不是 `GetWindowRect`,后者把阴影和不可见缩放边框
+> 算进去,裁出来的内容就不居中了。
+
 `cursor_probe.py` 是光标本体的实机回归:把 `colors.cursor_bg` 改成品红,依次
 启动默认 / 竖条 / 半格 / 闪烁三种灭相 / 脉冲七组配置,按像素统计光标块的
 数量与包围盒,输出 `target/_cursor_shot/grid.png`。判据见下表(字号 16 时

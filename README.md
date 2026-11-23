@@ -32,8 +32,8 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 > 渲染的**真实窗口帧**:真毛玻璃、没有标签栏、没有标题栏,整个窗口就是终端。
 > 内容是**打开 VectorTerm 后的第一屏** —— 你自己的 PowerShell 7 profile 跑起来的
 > fastfetch(立绘 logo + 硬件 / 软件 / 时间信息)与 oh-my-posh 提示符。
-> 没有演示脚本、没有模拟按键,也不是画出来的效果图;窗口尺寸完全沿用主题
-> 设定的 1250×750。
+> 没有演示脚本、没有模拟按键,也不是画出来的效果图;主题配的是 1250×750,窗口会吸附到
+> 「整数行列 + 四周留白」,实际客户区 1246×761(111 列 × 32 行,上下各 12.5px)。
 > 重新生成只需 `python tools/diagnostics/readme_shot.py`(先 `build.cmd --release`);
 > 想拍带标签栏和状态栏的完整界面就加 `--theme deepseek --out assets/screenshot-deepseek.png`。
 
