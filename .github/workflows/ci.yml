@@ -1,0 +1,99 @@
+# =====================================================================
+# 每次 push / PR 跑一遍:文档审计 + 全量 release 测试。
+#
+# 目标只有一个 —— **发版前不用再人工跑一遍**:
+#   链接断了、手册漏了配置键、示例配置讲了过时的话、测试挂了,
+#   都在这条流水线上先红,而不是等 tag 推上去才发现。
+#
+# 构建入口仍然是 build.cmd(它自己找 vswhere / vcvars、跑 setup.ps1、
+# 透传 cargo),和本地、发版走同一条路径 —— 免得 CI 绿而本机红。
+#
+# 不做的事(故意的):
+#   * 不跑 `cargo fmt --check`:仓库没有按 rustfmt 全量格式化过,
+#     一开就会红 300 处,淹掉真正的问题;
+#   * 不在 CI 里缓存 target/:release + LTO 的产物几个 GB,撑不住额度。
+# =====================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 文档审计 + release 测试
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 这三个脚本都是纯标准库,不需要装依赖。任何一个非 0 退出就失败。
+      - name: 文档审计
+        shell: pwsh
+        run: |
+          python tools/diagnostics/check_md_links.py
+          if ($LASTEXITCODE -ne 0) { throw "README / docs 里有断链或找不到的锚点" }
+
+          python tools/diagnostics/check_tables.py
+          if ($LASTEXITCODE -ne 0) { throw "手册里的表格列数不一致" }
+
+          python tools/diagnostics/audit_config_docs.py
+          if ($LASTEXITCODE -ne 0) { throw "配置手册 / 示例配置与 schema 不一致" }
+
+      # 版本徽章是门面,漂了就是 README 在撒谎。发版时 tag 说了算
+      # (release.yml 会回写 Cargo.toml),这里保证 README 跟着走。
+      - name: 版本号一致性
+        shell: pwsh
+        run: |
+          $row = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $row) { throw 'Cargo.toml 里找不到 version = "..."' }
+          $v = $row.Matches[0].Groups[1].Value
+          $readme = Get-Content README.md -Raw
+          if ($readme -notmatch [regex]::Escape("badge/version-v$v-blue")) {
+            throw "README 的版本徽章和 Cargo.toml($v)对不上"
+          }
+          Write-Host "版本 $v 一致"
+
+      - name: 安装 Rust(MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # key 带上游 tag 与补丁内容:换了版本或改了补丁就重新拉
+      - name: 缓存 wezterm 上游源码
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.wezterm-src
+          key: wezterm-${{ hashFiles('setup.ps1') }}-${{ hashFiles('patches/*.patch') }}
+
+      - name: 拉取 wezterm 上游源码
+        shell: pwsh
+        run: |
+          ./setup.ps1
+          if ($LASTEXITCODE -ne 0) { throw "setup.ps1 失败(exit $LASTEXITCODE)" }
+          if (-not (Test-Path '.wezterm-src\term\src\lib.rs')) { throw '.wezterm-src 不完整' }
+
+      # release 下跑:光栅化 / 排版那些测试带阈值,debug 的帧时间没有意义
+      - name: 跑测试
+        shell: cmd
+        run: build.cmd test --release
