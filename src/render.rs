@@ -533,6 +533,13 @@ fn glyph_role(ch: char) -> GlyphRole {
 
 /// 状态栏图标的目标高度 = 数字字高 × 这个倍数。略高于数字,看着不憋屈。
 const ICON_RATIO: f64 = 1.10;
+/// 图标墨迹宽度最多占几格。
+///
+/// 图标在一个格子里居中放,溢出部分落在格子两侧。fastfetch / OMP 的写法
+/// 都是"图标 + 空格 + 文字",后面还有整整一格缓冲,所以给到一格半也不会
+/// 压到文字;只给一格的话方形图标最大只能 8×8,而文字有 13px 高 —— 整列
+/// 图标会比字小一圈。
+const ICON_MAX_SPILL: f64 = 1.5;
 /// 墨迹高过数字的这个倍数,就判定它"画满了 em 框",重新栅格化小一档。
 const ICON_OVERSIZE: f64 = 1.12;
 
@@ -810,6 +817,152 @@ fn block_rects(ch: char) -> Option<&'static [BlockRect]> {
         _ => return None,
     };
     Some(r)
+}
+
+/// 制表符的线型(对应字体里 ─ / ━ / ═ 三档粗细)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineStyle {
+    /// 细线 ─ │ ┌ ...(字体墨迹 2px @14px 字号)
+    Light,
+    /// 粗线 ━ ┃ ┏ ...
+    Heavy,
+    /// 双线 ═ ║ ╔ ...(两条细线夹一道等宽空隙)
+    Double,
+}
+
+/// 制表符的四条臂:左、右、上、下。
+type BoxArms = [bool; 4];
+
+/// 横竖线、角、丁字、十字的几何定义。
+///
+/// 这些字符**不能走字形重采样**:字体的制表符墨迹是按"行框"设计的,
+/// `│` 在 14px 字号下墨迹高 22px 而格子只有 18px,必须缩 1.125 倍;
+/// 横向又是 `cell_span / advance = 8 / 8.4`,同样带小数。于是 2px 的线
+/// 被摊到 3 行上(实测 alpha 181/146/112),一整条分隔线看起来就是
+/// 发虚的、带周期性暗纹的虚线;`║` 的两条竖线之间还会被糊成一片。
+///
+/// 按格子几何画矩形就没有这个问题:线宽是整数像素,横线的左右边正好
+/// 落在格子边界上,相邻格天然无缝,CPU / GPU 两条路径也完全一致。
+///
+/// 混合粗细(250D..250E、2511..2512 等)和虚线(2504..250B)不在表里,
+/// 仍走字形路径。
+fn box_line(ch: char) -> Option<(LineStyle, BoxArms)> {
+    use LineStyle::{Double, Heavy, Light};
+    //                              [左, 右, 上, 下]
+    let v = match ch {
+        // ── 细线 ──
+        '\u{2500}' => (Light, [true, true, false, false]), // ─
+        '\u{2502}' => (Light, [false, false, true, true]), // │
+        '\u{250c}' => (Light, [false, true, false, true]), // ┌
+        '\u{2510}' => (Light, [true, false, false, true]), // ┐
+        '\u{2514}' => (Light, [false, true, true, false]), // └
+        '\u{2518}' => (Light, [true, false, true, false]), // ┘
+        '\u{251c}' => (Light, [false, true, true, true]),  // ├
+        '\u{2524}' => (Light, [true, false, true, true]),  // ┤
+        '\u{252c}' => (Light, [true, true, false, true]),  // ┬
+        '\u{2534}' => (Light, [true, true, true, false]),  // ┴
+        '\u{253c}' => (Light, [true, true, true, true]),   // ┼
+        // ━━ 粗线 ━━
+        '\u{2501}' => (Heavy, [true, true, false, false]), // ━
+        '\u{2503}' => (Heavy, [false, false, true, true]), // ┃
+        '\u{250f}' => (Heavy, [false, true, false, true]), // ┏
+        '\u{2513}' => (Heavy, [true, false, false, true]), // ┓
+        '\u{2517}' => (Heavy, [false, true, true, false]), // ┗
+        '\u{251b}' => (Heavy, [true, false, true, false]), // ┛
+        '\u{2523}' => (Heavy, [false, true, true, true]),  // ┣
+        '\u{252b}' => (Heavy, [true, false, true, true]),  // ┫
+        '\u{2533}' => (Heavy, [true, true, false, true]),  // ┳
+        '\u{253b}' => (Heavy, [true, true, true, false]),  // ┻
+        '\u{254b}' => (Heavy, [true, true, true, true]),   // ╋
+        // ══ 双线 ══
+        '\u{2550}' => (Double, [true, true, false, false]), // ═
+        '\u{2551}' => (Double, [false, false, true, true]), // ║
+        '\u{2554}' => (Double, [false, true, false, true]), // ╔
+        '\u{2557}' => (Double, [true, false, false, true]), // ╗
+        '\u{255a}' => (Double, [false, true, true, false]), // ╚
+        '\u{255d}' => (Double, [true, false, true, false]), // ╝
+        '\u{2560}' => (Double, [false, true, true, true]),  // ╠
+        '\u{2563}' => (Double, [true, false, true, true]),  // ╣
+        '\u{2566}' => (Double, [true, true, false, true]),  // ╦
+        '\u{2569}' => (Double, [true, true, true, false]),  // ╩
+        '\u{256c}' => (Double, [true, true, true, true]),   // ╬
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 四边各自取整后相减再填矩形。
+///
+/// 和 `block_rects` 一个口径:不能"起点取整 + 宽度取整",否则相邻格的
+/// 接缝会累积成漏缝或多盖一列。两条边用同一个取整函数,横向一条长线的
+/// 每一段左边界都等于上一段的右边界。
+fn fill_edges(frame: &mut Frame, x0: f64, x1: f64, y0: f64, y1: f64, color: Rgb) {
+    let px = x0.round();
+    let py = y0.round();
+    let pw = x1.round() - px;
+    let ph = y1.round() - py;
+    if pw > 0.0 && ph > 0.0 {
+        frame.rect(px, py, pw, ph, color, 1.0);
+    }
+}
+
+/// 把一个制表符按格子几何画进 `frame`。`left`/`top` 是格子左上角像素。
+///
+/// 双线拆成两条平行细线:偏移 ±(线宽+空隙)/2,空隙取线宽一半(14px 字号
+/// 下就是 2+1+2 = 5px,和字体里 ═ / ║ 的墨迹跨度一致)。
+#[allow(clippy::too_many_arguments)]
+fn push_box_line(
+    frame: &mut Frame,
+    left: f64,
+    top: f64,
+    cell_w: f64,
+    cell_h: f64,
+    style: LineStyle,
+    arms: BoxArms,
+    color: Rgb,
+) {
+    // 线宽跟着格子高走:14px 字号(cell_h = 18)对应细 2px / 粗 3px,
+    // 与字体自己的墨迹厚度一致(实测 ─ 两行、━ 三行)。
+    let thin = (cell_h / 9.0).round().max(1.0);
+    let (thick, gap) = match style {
+        LineStyle::Light => (thin, 0.0),
+        LineStyle::Heavy => ((thin * 1.5).round().max(thin + 1.0), 0.0),
+        LineStyle::Double => (thin, (thin / 2.0).round().max(1.0)),
+    };
+    let xc = left + cell_w / 2.0;
+    let yc = top + cell_h / 2.0;
+    let right = left + cell_w;
+    let bottom = top + cell_h;
+    let step = if style == LineStyle::Double { thick + gap } else { 0.0 };
+    let offsets: [f64; 2] = if style == LineStyle::Double {
+        [-0.5, 0.5]
+    } else {
+        [0.0, 0.0]
+    };
+    let n = if style == LineStyle::Double { 2 } else { 1 };
+    for &k in offsets.iter().take(n) {
+        let off = k * step;
+        // 横臂:两侧都有就是整格宽;只有一侧就从格中线起,和竖臂的边对齐
+        if arms[0] || arms[1] {
+            let (x0, x1) = match (arms[0], arms[1]) {
+                (true, true) => (left, right),
+                (true, false) => (left, xc + off + thick / 2.0),
+                (false, true) => (xc + off - thick / 2.0, right),
+                (false, false) => (0.0, 0.0),
+            };
+            fill_edges(frame, x0, x1, yc + off - thick / 2.0, yc + off + thick / 2.0, color);
+        }
+        // 竖臂
+        if arms[2] || arms[3] {
+            let (y0, y1) = match (arms[2], arms[3]) {
+                (true, true) => (top, bottom),
+                (true, false) => (top, yc + off + thick / 2.0),
+                (false, true) => (yc + off - thick / 2.0, bottom),
+                (false, false) => (0.0, 0.0),
+            };
+            fill_edges(frame, xc + off - thick / 2.0, xc + off + thick / 2.0, y0, y1, color);
+        }
+    }
 }
 
 /// 一个字体及其 PxScale。
@@ -1248,7 +1401,9 @@ fn reflow_padding(
     let bottom = (pad_y_base + OPTICAL_GAP)
         .min(spare - OPTICAL_GAP)
         .max(OPTICAL_GAP);
-    // 调用方拿到的是**顶**留白(origin_y),底边是剩余部分
+    // 调用方拿到的是**顶**留白(origin_y),底边是剩余部分。
+    // 这里刻意保留小数(底边 14.5px 这类约定在多个预设间要对齐),
+    // 像素对齐交给 `cell_rect` —— 它是所有绘制的唯一入口。
     (spare - bottom).max(0.0)
 }
 
@@ -1352,9 +1507,17 @@ impl Renderer {
                     .round()
                     .max(1.0),
             };
-            // 行高比字体本身高时,把多出来的空间均分到上下,字形垂直居中
+            // 行高比字体本身高时,把多出来的空间均分到上下,字形垂直居中。
+            // 基线取整是硬要求:ascent 带小数会让每一行字形都落在半像素上,
+            // GPU 的最近邻采样会在上下各丢半个像素(文字像被削了底边)。
+            // 终端是整像素网格,亚像素定位没有任何收益。
             let leading = cell_h - natural_h;
-            (cell_w, advance_w, cell_h, sf.ascent() as f64 + leading / 2.0)
+            (
+                cell_w,
+                advance_w,
+                cell_h,
+                (sf.ascent() as f64 + leading / 2.0).round(),
+            )
         };
 
         Ok(Self {
@@ -1467,9 +1630,14 @@ impl Renderer {
     }
 
     pub fn cell_rect(&self, col: usize, row: usize) -> CellRect {
+        // 原点取整:留白和行高算出来可能是 14.5 这种半像素(多个预设要对齐
+        // 底边,不能粗暴 round 掉)。但绘制必须落在整像素上 —— GPU 用最近邻
+        // 采样字形图集,quad 顶点停在半像素会把首尾一行/列采到相邻纹素,
+        // 字看起来就像底部、右边被削掉一条,背景色块也会和字形错开半像素。
+        // 终端本来就是整像素网格,这里取整没有副作用。
         CellRect {
-            x: self.pad_x + col as f64 * self.cell_w,
-            y: self.pad_y + self.content_top + row as f64 * self.cell_h,
+            x: (self.pad_x + col as f64 * self.cell_w).round(),
+            y: (self.pad_y + self.content_top + row as f64 * self.cell_h).round(),
             w: self.cell_w,
             h: self.cell_h,
         }
@@ -1478,8 +1646,8 @@ impl Renderer {
     /// 带额外像素偏移的 `cell_rect`(分屏时 pane 的左上角相对内容区原点偏移)。
     pub fn cell_rect_off(&self, col: usize, row: usize, ox: f64, oy: f64) -> CellRect {
         CellRect {
-            x: self.pad_x + ox + col as f64 * self.cell_w,
-            y: self.pad_y + self.content_top + oy + row as f64 * self.cell_h,
+            x: (self.pad_x + ox + col as f64 * self.cell_w).round(),
+            y: (self.pad_y + self.content_top + oy + row as f64 * self.cell_h).round(),
             w: self.cell_w,
             h: self.cell_h,
         }
@@ -2323,9 +2491,11 @@ impl Renderer {
                 let (gw, gh) = (g.w as f64, g.h as f64);
                 let s = (cell_w / gw).min(cell_h / gh).min(1.0);
                 let (dw, dh) = (gw * s, gh * s);
-                let dx = ox + (cell_w - dw) / 2.0;
+                // 落位取整:半像素位置会被 GPU 的最近邻采样取到相邻纹素,
+                // 图标边缘发糊、上下各缺一条(和正文同一套原因)。
+                let dx = (ox + (cell_w - dw) / 2.0).round();
                 // 墨迹中线对齐文字中线(band_c 是相对基线、向上为负的偏移)
-                let dy = baseline + band_c - dh / 2.0;
+                let dy = (baseline + band_c - dh / 2.0).round();
                 let bold = g.synthetic_bold;
                 frame.glyph(
                     id,
@@ -2351,7 +2521,12 @@ impl Renderer {
                 let g = &self.glyphs[id as usize];
                 let (gw, gh) = (g.w as f64, g.h as f64);
                 let bold = g.synthetic_bold;
-                let dst = (ox + g.left as f64, baseline + g.top as f64, gw, gh);
+                let dst = (
+                    (ox + g.left as f64).round(),
+                    (baseline + g.top as f64).round(),
+                    gw,
+                    gh,
+                );
                 frame.glyph(id, (0.0, 0.0, gw, gh), dst, color, style.italic, false);
                 if bold {
                     frame.glyph(
@@ -3078,6 +3253,23 @@ impl Renderer {
                 pen += cell_span;
                 continue;
             }
+            // 制表符的横竖线 / 角 / 丁字 / 十字:同样按几何画。字形路径会把
+            // 2px 的线重采样成 3 行半透明(CPU 盒式平均更明显),整条分隔线
+            // 看起来就是发虚的虚线 —— 详见 `push_box_line` 的说明。
+            if let Some((style, arms)) = box_line(ch) {
+                push_box_line(
+                    frame,
+                    pen.floor(),
+                    cell_top.floor(),
+                    cell_span,
+                    cell_h,
+                    style,
+                    arms,
+                    color,
+                );
+                pen += cell_span;
+                continue;
+            }
             // Powerline 分隔符(E0B0..E0BF):**不查字体**,直接用几何画。
             // 必须放在 `self.glyph()` 之前 —— 主字体没有这些码位时(没装 Nerd
             // Font 的常见情况)字形查找会返回 None,几何却是永远画得出来的。
@@ -3104,6 +3296,11 @@ impl Renderer {
                 continue;
             }
             let Some(id) = self.glyph(ch, style) else {
+                // 没有墨迹的字符(空格最常见)也必须占掉笔位:以前直接
+                // `continue`,整行排版时后面的字会顶上来,空格被"吃掉" ——
+                // 主网格因为逐格调用看不出来,但一行里连排多字符时(提示符、
+                // 测试)就是图标和文字粘在一起。
+                pen += cell_span;
                 continue;
             };
             let g = &self.glyphs[id as usize];
@@ -3153,41 +3350,51 @@ impl Renderer {
                     pen += cell_span;
                 }
                 GlyphRole::Icon => {
-                    // 图标按**字体原尺寸**画,不往单元格里挤。
+                    // 所有 PUA 图标统一缩放进**同一个内接框**:宽一格 × 高文字墨迹。
                     //
-                    // wezterm 对 Nerd Font 私有区的处理就是这样:字形 shaping 出来
-                    // 多大就画多大,允许越过格子边界(终端网格只按 wcwidth 给它
-                    // 一格)。以前这里用 `min(cell_w/gw, cell_h/gh, 1)` 硬塞,
-                    // 内置 "Nerd Font Symbols" 的图标墨迹 ~18px、advance 20px,
-                    // 被压进 11px 的格子只剩六成 —— 这就是 OMP 的 Windows 图标
-                    // 比文字小一圈的原因。
+                    // 之前是两套互相冲突的启发式:高度那套用 `gh >= 0.6*band_h`
+                    // 当门槛(矮图标完全不动),宽度那套只处理 `gw > gh*1.15`
+                    // 的扁条。结果是内置 Symbols Nerd Font 里同一列图标被分成
+                    // 三类 —— fastfetch 的 GPU 9x5 被宽度压到 8x5、Disk 14x13
+                    // 完全不缩、Display 9x8 被放大到 14x14,一列里从 5px 到
+                    // 14px 参差得像没对齐。
                     //
-                    // 垂直方向也不能按字形顶边摆:Nerd Font 各套图标的墨迹高度
-                    // 能从 0.6em 跨到 1.2em。和状态栏一样拿数字 `0` 的墨迹当
-                    // 基准,把接近文字高度的图标**按目标尺寸重新栅格化**(放大
-                    // 也缩小的,不是拉伸位图),再把墨迹中线对齐文字中线。
-                    // 故意只画半个字高的图标(月亮那种)保持原样,不硬撑大。
+                    // 用一个统一的内接框就没这个问题:每个图标都按"等比例放进
+                    // 一格半宽 × 文字高"的矩形来缩,宽的自然走到宽度上限、高的
+                    // 自然走到文字高,外接比例一致,整列看起来就是同一个尺寸体系。
+                    // 保持等比,绝不拉伸 —— 拉伸会让 GPU 那种横条图标变形。
+                    //
+                    // 宽度上限是一格半(见 `ICON_MAX_SPILL`):图标后面都跟着一个
+                    // 空格,格内居中后左右各溢 1/4 格,离文字还有大半格缓冲。
+                    // 基准仍拿数字 `0` 的墨迹,缩放后墨迹中线对齐文字中线。
                     let (band_c, band_h) = self.text_band(style, 1.0);
                     let mut id = id;
-                    if band_h > 1.0 && gh >= band_h * 0.6 {
-                        let want = band_h * ICON_RATIO;
-                        if (gh - want).abs() > 1.0 {
-                            if let Some(sized) = self.glyph_scaled(ch, style, want / gh) {
-                                id = sized;
-                            }
+                    let (mut gw, mut gh) = (gw, gh);
+                    let mut factor = 1.0f64;
+                    if band_h > 1.0 && gw > 0.0 && gh > 0.0 {
+                        let want_h = band_h * ICON_RATIO;
+                        factor = (want_h / gh).min(cell_span * ICON_MAX_SPILL / gw);
+                    }
+                    if (factor - 1.0).abs() > 0.01 {
+                        if let Some(sized) = self.glyph_scaled(ch, style, factor) {
+                            id = sized;
+                            let g2 = &self.glyphs[id as usize];
+                            gw = g2.w as f64;
+                            gh = g2.h as f64;
                         }
                     }
                     let g2 = &self.glyphs[id as usize];
-                    let (gw, gh) = (g2.w as f64, g2.h as f64);
                     let dw = gw;
                     let dh = gh;
-                    // 比一格窄才居中;比一格宽就左对齐 —— 让它往**右边**的空格
-                    // 溢出,而不是压到左边上一段的箭头/菱形上。
-                    let dx = ox + ((cell_span - dw) * 0.5).max(0.0);
+                    // 图标已统一缩进一格,格内水平居中;垂直按墨迹中线对齐
+                    // 文字中线(比按字形顶边摆稳,各种图标高度都能对齐)。
+                    // 落位取整:GPU 是最近邻采样,位置带小数会取到相邻纹素,
+                    // 图标边缘看起来就糊了/缺一条。
+                    let dx = (ox + (cell_span - dw) * 0.5).round();
                     let dy = if band_h > 1.0 {
-                        baseline + band_c - dh / 2.0
+                        (baseline + band_c - dh / 2.0).round()
                     } else {
-                        baseline + g2.top as f64
+                        (baseline + g2.top as f64).round()
                     };
                     let dst = (dx, dy, dw, dh);
                     frame.glyph(id, (0.0, 0.0, gw, gh), dst, color, style.italic, false);
@@ -3208,7 +3415,14 @@ impl Renderer {
                     let max_w = (span.max(1) as f64 + 0.25) * cell_w;
                     let s = if gw > max_w { max_w / gw } else { 1.0 };
                     let (dw, dh) = (gw * s, gh * s);
-                    let dst = (pen + g.left as f64 * s, baseline + g.top as f64, dw, dh);
+                    // 落位取整(见上面图标分支):半像素位置会让 GPU 的
+                    // 最近邻采样丢掉首尾一行/列,文字底部和右边看起来被切。
+                    let dst = (
+                        (pen + g.left as f64 * s).round(),
+                        (baseline + g.top as f64).round(),
+                        dw,
+                        dh,
+                    );
                     frame.glyph(id, (0.0, 0.0, gw, gh), dst, color, style.italic, false);
                     if bold {
                         frame.glyph(
@@ -5634,8 +5848,8 @@ mod dump {
     /// OMP 的 OS 图标(U+E62A)在正文里必须和文字一样大、一样居中。
     ///
     /// 回归:以前图标被 `min(cell_w/ink_w, ...)` 挤进一格,只有文字的六成高,
-    /// 还按字形顶边摆位,所以"又小又歪"。wezterm 是按字体原尺寸画、允许溢出
-    /// 格子的,这里对齐它的做法。
+    /// 还按字形顶边摆位,所以"又小又歪"。方形图标(近似一格见方)现在仍按
+    /// 文字高度放大;只有宽扁图标会被宽度约束收窄,见下一条测试。
     #[test]
     fn prompt_icon_keeps_natural_size_and_text_center() {
         let cfg = AppConfig::default();
@@ -5691,6 +5905,76 @@ mod dump {
         assert!(
             (icon_center - (100.0 + band_c)).abs() <= 1.5,
             "图标中线应落在 baseline + band_c"
+        );
+    }
+
+    /// 宽扁的 Nerd Font 图标(󰾲 GPU / 󰩺 Memory 一类)不能压到后面的文字。
+    ///
+    /// 回归:fastfetch 的 key 图标在 Meslo 兜底字体里墨迹有 9x5、15x12,
+    /// 比一格宽。上一版按原尺寸画且左对齐,右缘越过格子把 `GPU` 的 G 盖掉
+    /// 半边 —— 截图里就是 "󰾲GPU" 粘连、字母像被切了一块。
+    ///
+    /// 现在所有图标等比缩进"一格半宽 × 文字高"的内接框并居中,允许溢出到
+    /// 格子两侧的空隙(图标后面固定跟着一个空格)。这里守两条线:墨迹宽度
+    /// 不超过一格半,右缘不越过紧随其后的字符。
+    #[test]
+    fn wide_icon_stays_in_cell_and_does_not_cover_text() {
+        let mut cfg = AppConfig::default();
+        cfg.fonts.size = 14.0;
+        let mut r = Renderer::new(&cfg, 1.0).expect("加载字体");
+        r.ensure_icons();
+        let style = StyleBits::default();
+        let cell_w = r.cell_w;
+
+        // 直接量图标单字:宽度不得超过一格半(溢出落在两侧空格里)
+        for ch in ['\u{f0fb2}', '\u{f0b9}'] {
+            let mut frame = Frame::default();
+            r.draw_text(
+                &mut frame,
+                &ch.to_string(),
+                0.0,
+                100.0,
+                Rgb { r: 255, g: 255, b: 255 },
+                style,
+                1,
+            );
+            let icon = frame.items.iter().find_map(|i| match i {
+                crate::frame::Item::Glyph { dst, .. } => Some(*dst),
+                _ => None,
+            }).expect("图标应有字形");
+            assert!(
+                icon[2] as f64 <= cell_w * ICON_MAX_SPILL + 0.01,
+                "图标 {ch:?} 墨迹宽 {:.2} 超过一格半 {:.2}",
+                icon[2],
+                cell_w * ICON_MAX_SPILL
+            );
+        }
+
+        // 整行:图标右缘不应越过紧随其后的 'G' 的左缘
+        let mut frame = Frame::default();
+        r.draw_text(
+            &mut frame,
+            "\u{f0fb2} GPU",
+            0.0,
+            100.0,
+            Rgb { r: 255, g: 255, b: 255 },
+            style,
+            1,
+        );
+        let glyphs: Vec<_> = frame
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::frame::Item::Glyph { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(glyphs.len(), 4, "图标 + G P U 四个字形");
+        let icon_right = glyphs[0][0] as f64 + glyphs[0][2] as f64;
+        let g_left = glyphs[1][0] as f64;
+        assert!(
+            icon_right <= g_left - 1.0,
+            "图标右缘 {icon_right:.2} 压到 G(左缘 {g_left:.2}),间距不足 1px"
         );
     }
 
@@ -5975,3 +6259,4 @@ mod dump {
         crate::wlog!("tab bar frame -> {path} ({w}x{h})");
     }
 }
+

@@ -291,14 +291,30 @@ jobs:
             "target\installer\SHA256SUMS.txt"
           )
 
+          # 发布页正文:优先用仓库里按 tag 名放的文案(.github/release-notes/vX.Y.Z.md),
+          # 没有就回退到 gh 自动生成。这样文案跟着 tag 走,以后加版本不用改 workflow。
+          $notesFile = ".github/release-notes/$tag.md"
+          if (Test-Path $notesFile) {
+            Write-Host "发布页正文: $notesFile"
+            $notesArgs = @('--notes-file', $notesFile)
+          } else {
+            Write-Host "未找到 $notesFile,回退到 --generate-notes"
+            $notesArgs = @('--generate-notes')
+          }
+
           # 重跑同一个 tag 时 release 已经存在,用 upload --clobber 盖掉,
           # 而不是直接失败(第一次打包挂了、修完重跑是常态)。
           gh release view $tag --json isDraft *> $null
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Release $tag 已存在,覆盖资产"
             gh release upload $tag @files --clobber
+            # 正文也一起刷新,免得改了文案重跑却还是旧的说明。
+            # 只有存在文案文件时才刷:edit 没有 --generate-notes,传不存在的文件会失败。
+            if (Test-Path $notesFile) {
+              gh release edit $tag --notes-file $notesFile
+            }
           } else {
-            gh release create $tag @files --title "VectorTerm $ver" --generate-notes --verify-tag
+            gh release create $tag @files --title "VectorTerm $ver" @notesArgs --verify-tag
           }
           if ($LASTEXITCODE -ne 0) { throw "发布失败(gh exit $LASTEXITCODE)" }
 

@@ -8,7 +8,7 @@
 ; 编译(不要直接双击,版本号与输出目录由 build.cmd 传进来):
 ;   build.cmd installer
 ; 手动编译:
-;   ISCC.exe /DMyAppVersion=1.0.0 installer\VectorTerm.iss
+;   ISCC.exe /DMyAppVersion=1.2.0 installer\VectorTerm.iss
 ;
 ; 文件必须是 **UTF-8 with BOM**,否则 ISCC 按 ANSI 解码,中文会变乱码。
 ; =====================================================================
@@ -21,7 +21,7 @@
 
 ; build.cmd 从 Cargo.toml 读出真实版本后覆盖这个默认值
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.2.0"
 #endif
 
 ; Release 产物路径。默认就是仓库里的 target\release\VectorTerm.exe;

@@ -408,11 +408,11 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 test --release -- --nocaptu
 推一个 `v` 开头的 tag,就在 GitHub 的 Windows runner 上编译、打包、发 Release。
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
-Release 里的资产是 `VectorTerm-1.0.0-setup.exe` 与 `SHA256SUMS.txt`。
+Release 里的资产是 `VectorTerm-1.2.0-setup.exe` 与 `SHA256SUMS.txt`。
 单次约 20–40 分钟,时间基本花在 wgpu / eframe 的 release + lto 上。
 
 ### 版本号:tag 说了算

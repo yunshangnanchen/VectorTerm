@@ -12,7 +12,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   <img src="https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="rust">
   <img src="https://img.shields.io/badge/renderer-softbuffer%20%7C%20wgpu%2FDX12-4b8bbe" alt="renderer">
   <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange" alt="license">
-  <img src="https://img.shields.io/badge/version-v1.0.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.2.0-blue" alt="version">
 </p>
 
 <p>
@@ -129,12 +129,13 @@ ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 
 ### 渲染
 
 - 粗体 / 斜体 / 暗淡 / 反显 / 闪烁 / 四种下划线 / 删除线,粗体与斜体优先用字体的真 face
-- 按字形角色排版:制表符保线宽;PUA / Nerd Font 图标按**字体原尺寸**画(和 wezterm 一样,允许溢出格子),墨迹中线对齐旁边的文字,不会又小又歪
+- 按字形角色排版:制表符(细线 / 粗线 / 双线共 33 个)**不取字形,直接按格子画矩形** —— 线宽 `round(cell_h/9)`、四边各自取整后相减,相邻格无缝,一整行分隔线不再被摊成带暗纹的半透明虚线;PUA / Nerd Font 图标统一缩进「**一格半宽 × 1.10 倍文字墨迹高**」的内接框,等比不拉伸、格内居中、墨迹中线对齐旁边的文字 —— 系统字体缺 v3 码点回退到内置字体也不会忽大忽小
 - **Powerline 分隔符(`U+E0B0`–`U+E0BF`)不取字体字形,直接按格子画**:三角形 / 半圆 / 斜线用 wezterm `customglyph.rs` 的同一套单位坐标(二次贝塞尔已展平),4×4 超采样出灰度蒙版,再按 `floor` 对齐铺满整格 —— 段与段之间**不会漏出一条背景色的缝**,圆头不会被拉成椭圆,换字体也不变形;Oh My Posh 的 powerline / diamond 主题逐格对齐 wezterm
 - 半块与象限块(`▄▀█▌▐▖▗`)按格子几何直接填矩形,**上下行之间没有横缝**
 - 中英混排按 em 归一,汉字之间不留"空格缝";Nerd Font 图标自动发现并排在文本回退之前
 - 自定义背景:壁纸 / 模糊 / 渐变 / 五种填充 / 半透明(配置项名对齐 wezterm);GPU 后端逐像素 alpha,只有背景变淡
 - 毛玻璃:`win32_system_backdrop = "acrylic"` 是真磨砂,且**窗口失焦不掉**(wezterm 的已知毛病在这里修掉了)
+- 字形落位一律对齐整像素,GPU 的字形图集走**最近邻**采样(图片仍走双线性)—— 同一份字形在 GPU 与 CPU 后端**逐像素一致**,不会再有「GPU 更糊」或「文字底部被削掉一条」
 
 ### 交互
 
@@ -349,7 +350,7 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 逐目录的"是什么 / 多大 / 能不能删"见 [docs/layout.md](docs/layout.md),
 各模块职责同在此文,依赖选型见 [docs/dependencies.md](docs/dependencies.md)。
 
-## 已知限制(v1.0)
+## 已知限制(v1.2)
 
 - **GPU 后端拖动缩放窗口时内容会被 DXGI 拉伸一下再弹回**(`wgpu-hal` 把 `DXGI_SCALING_STRETCH`
   写死);默认已改用 CPU 规避,根治方案见 [docs/resize-fix-plan.md](docs/resize-fix-plan.md)
@@ -363,9 +364,11 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 
 ## Roadmap
 
-1. **v1.1** — 超链接悬停与点击、矩形块选、正则/增量搜索、kitty keyboard protocol、HarfBuzz 整形
-2. **v1.2** — GPU 纵深:静态层缓存、多字形图集分页、HDR / 广色域
-3. **v1.3** — pane 尺寸调整、更多光标动画(残影、宽度过渡)
+> v1.2 是**渲染质量专项**(字形采样、像素对齐、图标尺寸、制表线),没有新功能,下面几项顺延一格。
+
+1. **v1.3** — 超链接悬停与点击、矩形块选、正则/增量搜索、kitty keyboard protocol、HarfBuzz 整形
+2. **v1.4** — GPU 纵深:静态层缓存、多字形图集分页、HDR / 广色域
+3. **v1.5** — pane 尺寸调整、更多光标动画(残影、宽度过渡)
 4. **远期** — 跨平台只保证功能等价,性能优化仍以 Windows 为第一优先
 
 ## 文档索引
