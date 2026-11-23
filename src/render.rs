@@ -3375,13 +3375,29 @@ impl Renderer {
                         let want_h = band_h * ICON_RATIO;
                         factor = (want_h / gh).min(cell_span * ICON_MAX_SPILL / gw);
                     }
-                    if (factor - 1.0).abs() > 0.01 {
-                        if let Some(sized) = self.glyph_scaled(ch, style, factor) {
-                            id = sized;
-                            let g2 = &self.glyphs[id as usize];
-                            gw = g2.w as f64;
-                            gh = g2.h as f64;
+                    // 位图宽度是 `px_bounds` 向上取整来的:12.0001 会变成 13,
+                    // 所以"一次除法算出的 factor"保证不了上限 —— 换字体(CI 上没
+                    // 装 Nerd Font、走内置 Symbols Nerd Font)就会冒出一像素。
+                    // 真超了按超出比例回缩再栅格化,最多两轮,保证落在框内。
+                    let cap_w = cell_span * ICON_MAX_SPILL;
+                    for _ in 0..2 {
+                        if (factor - 1.0).abs() <= 0.01 {
+                            break;
                         }
+                        let Some(sized) = self.glyph_scaled(ch, style, factor) else {
+                            break;
+                        };
+                        id = sized;
+                        let (w2, h2) = {
+                            let g2 = &self.glyphs[id as usize];
+                            (g2.w as f64, g2.h as f64)
+                        };
+                        gw = w2;
+                        gh = h2;
+                        if gw <= cap_w {
+                            break;
+                        }
+                        factor *= cap_w / gw;
                     }
                     let g2 = &self.glyphs[id as usize];
                     let dw = gw;
@@ -5978,6 +5994,49 @@ mod dump {
         );
     }
 
+    /// 没有系统 Nerd Font 时(CI 就是这种环境,图标全落到内置 Symbols Nerd Font)
+    /// 宽度上限同样要守住。
+    ///
+    /// 回归:内置字体里 `\u{f0b9}` 是 15x12,"一格半宽 ÷ 墨迹宽"算出的 factor
+    /// 是 0.8,理论宽度正好 12px —— 但位图宽度是 `px_bounds` **向上取整**来的,
+    /// 12.0001 就成了 13px,上限被顶穿一格。所以现在按栅格化后的真实位图宽度
+    /// 判定,超了回缩重画。
+    #[test]
+    fn icon_cap_holds_with_builtin_nerd_font() {
+        let mut cfg = AppConfig::default();
+        cfg.fonts.size = 14.0;
+        cfg.fonts.nerd_font = crate::config::NerdFontMode::Off;
+        let mut r = Renderer::new(&cfg, 1.0).expect("加载字体");
+        r.ensure_icons();
+        let cap_w = r.cell_w * ICON_MAX_SPILL;
+
+        for ch in ['\u{f0b9}', '\u{f0fb2}'] {
+            let mut frame = Frame::default();
+            r.draw_text(
+                &mut frame,
+                &ch.to_string(),
+                0.0,
+                100.0,
+                Rgb { r: 255, g: 255, b: 255 },
+                StyleBits::default(),
+                1,
+            );
+            let icon = frame
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    crate::frame::Item::Glyph { dst, .. } => Some(*dst),
+                    _ => None,
+                })
+                .expect("内置图标字体应该能画出来");
+            assert!(
+                icon[2] as f64 <= cap_w + 0.01,
+                "内置字体图标 {ch:?} 墨迹宽 {:.2} 超过一格半 {cap_w:.2}",
+                icon[2]
+            );
+        }
+    }
+
     /// 状态栏图标要按"文字高度"摆:画满 em 框的图标(比如 MDI 的电池)收到
     /// 数字高一点,并且**墨迹中线对齐文字中线** —— 不然它会比旁边的字高出一截、
     /// 底边坠到基线下面,一排看过去就是歪的。
@@ -6259,4 +6318,5 @@ mod dump {
         crate::wlog!("tab bar frame -> {path} ({w}x{h})");
     }
 }
+
 
