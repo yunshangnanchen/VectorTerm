@@ -59,9 +59,10 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 
 ## 内置主题
 
-都在 [`config/`](config/),前四套结构完全一致(1250×750 窗口、14 号字、行高 1.0、状态栏字号 0.9、
-片段间距 0、空格宽度 0.2),只是配色和状态栏脚本不同;`deepseek-glass` 尺寸一模一样,
-另外多了一层背景渐变 + 整窗半透明:
+都在 [`config/`](config/),六份配置里有五份是完整界面、结构完全一致(1250×750 窗口、
+14 号字、行高 1.0、状态栏字号 0.9、片段间距 0、空格宽度 0.2),只是配色和状态栏脚本不同;
+`deepseek-glass` 尺寸一模一样,另外多了一层背景渐变 + 整窗半透明,`deepseek-glass-minimal`
+再把它裁剪成"只剩终端"(见页首那张图):
 
 | 文件 | 风格 | 画布 | 强调色 | 活动标签 |
 |---|---|---|---|---|
@@ -73,7 +74,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
 | [`config/gemini.lua`](config/gemini.lua) | Gemini 蓝紫粉 | `#131314` | `#1A73E8` / `#8AB4F8` | 蓝底白字 |
 
 ChatGPT 那份是纯灰阶(界面没有任何彩色,只把 ANSI 16 色压到约 12% 饱和度以便
-`git diff` / `ls` 还能分色);其余三套各有品牌色的分屏渐变与光标尾迹配色。
+`git diff` / `ls` 还能分色);其余几套各有品牌色的分屏渐变与光标尾迹配色。
 
 带标签栏和状态栏的**完整界面**长这样(同样是真实窗口帧,不是效果图):
 
@@ -321,7 +322,8 @@ shell,旁边弹出一个独立的 `VectorTerm Debug Console` 列全部日志,ERR
 VectorTerm/
 ├── src/                 实现(render / frame / gpu / cursor / scroll / tabbar / font …)
 ├── settings-gui/        配置管理器(独立 Rust + egui crate,与终端本体零耦合)
-├── config/              config.lua 默认配置 + 五套内置主题(deepseek / deepseek-glass / chatgpt / claude / gemini)
+├── config/              config.lua 默认配置 + 六套内置主题(deepseek / deepseek-glass /
+│                        deepseek-glass-minimal / chatgpt / claude / gemini)
 ├── config.example.lua   全部可选项(注释版)
 ├── VectorTermLogo.png       图标母版(1080×1080,tools/gen_icons.py 的输入)
 ├── assets/icons/        由母版生成的分辨率梯子 + VectorTerm.ico(exe 图标)
@@ -340,7 +342,7 @@ VectorTerm/
 └── target/              构建缓存(不提交;跑 cargo test 后能长到 19 GB)
 ```
 
-工作区看起来有 19 GB,但**项目本身只有 5.0 MiB**(204 个文件):其余全是 `target/` 里的
+工作区看起来有 19 GB,但**项目本身只有 1.6 MiB**(246 个文件):其余全是 `target/` 里的
 Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)、184 份增量编译缓存、
 探针 example 的 401 MB `.pdb`。2026-11-10 清过一次,工作区从 19 GB 降到 1.5 GB
 (只剩 `release/` 与安装包),`cargo test` 会把 debug 那部分重新长回来。

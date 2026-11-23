@@ -1,7 +1,7 @@
 # 9. 目录结构
 
-工作区原本 19 GB(2026-11-10 清理后 1.5 GB,见 9.5),但**项目本身只有 5.0 MiB**
-(204 个文件,`git ls-files` 全量跟踪)。剩下的全是 `target/` 里的 Rust 构建缓存 ——
+工作区原本 19 GB(2026-11-10 清理后 1.5 GB,见 9.5),但**项目本身只有 1.6 MiB**
+(246 个文件,`git ls-files` 全量跟踪)。剩下的全是 `target/` 里的 Rust 构建缓存 ——
 删掉随时能重建,只是下次编译要重来一遍。下面按"是什么 / 多大 / 能不能删"过一遍。
 
 ## 9.1 一屏地图
@@ -12,14 +12,14 @@
 | `settings-gui/` | 配置管理器,独立 Rust + egui crate,与终端本体零耦合 | 314 KiB | 是 |
 | `vendor/` | 打过补丁的 `wgpu-hal`,经 `[patch.crates-io]` 接入 | 1.7 MiB | 是 |
 | `assets/` | 图标分辨率梯子 + `VectorTerm.ico` + 文档截图 | 439 KiB | 是 |
-| `docs/` | 14 篇设计文档与原理剖析(含本文件),外加 `docs/benchmark/` 性能报告目录 | 417 KiB | 是 |
-| `tools/` | 图标生成、Nerd Font 表生成、以及 `diagnostics/` 下 21 个诊断脚本 | 118 KiB | 是 |
+| `docs/` | 15 篇设计文档与原理剖析(含本文件),外加 `docs/benchmark/` 性能报告目录 | 417 KiB | 是 |
+| `tools/` | 图标生成、Nerd Font 表生成、以及 `diagnostics/` 下 44 个诊断脚本(可复现截图 / 像素量测 / 主题回归) | 118 KiB | 是 |
 | `docs/benchmark/` | 性能报告 + 原始 CSV + 一键复现脚本(报告正文在 `docs/` 里,数据在这里) | 98 KiB | 是 |
-| `config/` | `config.lua` 默认配置 + 四套内置主题(`deepseek`/`chatgpt`/`claude`/`gemini`) | 47 KiB | 是 |
+| `config/` | `config.lua` 默认配置 + 六套内置主题(`deepseek` / `deepseek-glass` / `deepseek-glass-minimal` / `chatgpt` / `claude` / `gemini`) | 47 KiB | 是 |
 | `installer/` | Inno Setup 脚本(可选 PATH、App Paths、卸载清理) | 33 KiB | 是 |
 | 根目录文件 | `README.md`、`Cargo.toml`/`Cargo.lock`、`build.cmd`、`config.example.lua`、`VectorTermLogo.png`、两份许可证 | 450 KiB | 是 |
 | `examples/`、`patches/` | 一个示例 + 上游 `wezterm-term` 回绕越界补丁 | 5 KiB | 是 |
-| `.git/` | 版本库本体(204 个文件的历史) | 5 MiB | — |
+| `.git/` | 版本库本体(246 个文件的历史) | 5 MiB | — |
 | `.wezterm-src/` | `wezterm-term` / `termwiz` 的浅克隆,**编译必需**,`setup.ps1` 会拉 | 23 MiB | 否 |
 | `.workbuddy/` | 开发会话的工作记忆(日期日志 + 项目笔记) | 204 KiB | 否 |
 | `config/.venv/` | 旧的 tkinter 版配置管理器的 Python 虚拟环境,**已废弃并已删除**(见 9.5) | 曾占 14 MiB | 否 |
