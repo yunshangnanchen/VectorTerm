@@ -19,6 +19,13 @@ import re
 import sys
 from pathlib import Path
 
+# runner 的 stdout 是 cp1252;本脚本输出大量中文,不固定编码会直接崩在
+# 第一处 print 上,CI 报的"断链或找不到的锚点"其实是编码错。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCHEMA = ROOT / "settings-gui/src/schema.rs"
 CONFIG_RS = ROOT / "src/config.rs"

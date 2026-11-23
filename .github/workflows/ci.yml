@@ -35,6 +35,9 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
+      # runner 上 Python 把重定向的 stdout 当 cp1252,审计脚本 print 中文会崩。
+      # 脚本内部也各自 reconfigure 了,这里再兜一层(包括以后新增的脚本)。
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: 检出代码

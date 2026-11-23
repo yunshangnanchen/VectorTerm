@@ -1,4 +1,10 @@
-import re, pathlib
+import re, pathlib, sys
+
+# 和另两个审计脚本一样:runner 的 stdout 是 cp1252,print 中文会崩。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 lines = pathlib.Path("docs/config-manual.md").read_text(encoding="utf-8").splitlines()
 
@@ -32,3 +38,6 @@ while i < len(lines):
 print("表格列数异常:", len(issues))
 for it in issues:
     print("  行%d 期望%d列 实际%d列: %s" % it)
+# 以前这里只打印不退出,CI 的 "if ($LASTEXITCODE -ne 0)" 永远为真不了 ——
+# 那一步等于空跑。现在真有问题就把流水线拦下来。
+sys.exit(1 if issues else 0)

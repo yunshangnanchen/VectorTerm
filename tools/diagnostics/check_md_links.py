@@ -13,6 +13,15 @@ import pathlib
 import re
 import sys
 
+# GitHub Actions 的 windows-latest 上 Python 把重定向的 stdout 当成 cp1252,
+# 直接 print 中文会抛 UnicodeEncodeError —— 那时脚本其实一条链接都还没查。
+# 脚本自己固定 UTF-8,比在 workflow 里设 PYTHONIOENCODING 更靠得住:
+# 本地直接跑、CI 里跑、别人拿去跑都是同一份输出。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 root = pathlib.Path(".")
 docs = [root / "README.md", *sorted((root / "docs").glob("*.md"))]
 

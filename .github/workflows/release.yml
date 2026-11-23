@@ -45,6 +45,8 @@ jobs:
       contents: write
     env:
       CARGO_TERM_COLOR: always
+      # 和 ci.yml 一样:审计脚本输出中文,不能让 cp1252 把发版卡住。
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: 检出代码
