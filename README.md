@@ -12,7 +12,7 @@ wezterm 的终端核心 · 自研轻量渲染层 · Kitty 风格光标尾迹 · 
   <img src="https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=white" alt="rust">
   <img src="https://img.shields.io/badge/renderer-softbuffer%20%7C%20wgpu%2FDX12-4b8bbe" alt="renderer">
   <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange" alt="license">
-  <img src="https://img.shields.io/badge/version-v0.1.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.0.0-blue" alt="version">
 </p>
 
 <p>
@@ -349,7 +349,7 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 逐目录的"是什么 / 多大 / 能不能删"见 [docs/layout.md](docs/layout.md),
 各模块职责同在此文,依赖选型见 [docs/dependencies.md](docs/dependencies.md)。
 
-## 已知限制(v0.1)
+## 已知限制(v1.0)
 
 - **GPU 后端拖动缩放窗口时内容会被 DXGI 拉伸一下再弹回**(`wgpu-hal` 把 `DXGI_SCALING_STRETCH`
   写死);默认已改用 CPU 规避,根治方案见 [docs/resize-fix-plan.md](docs/resize-fix-plan.md)
@@ -363,9 +363,9 @@ Rust 构建缓存 —— debug 版 606 个 `.rlib`(单个 `libnaga` 就 104 MB)�
 
 ## Roadmap
 
-1. **v0.2** — 超链接悬停与点击、矩形块选、正则/增量搜索、kitty keyboard protocol、HarfBuzz 整形
-2. **v0.3** — GPU 纵深:静态层缓存、多字形图集分页、HDR / 广色域
-3. **v0.4** — pane 尺寸调整、更多光标动画(残影、宽度过渡)
+1. **v1.1** — 超链接悬停与点击、矩形块选、正则/增量搜索、kitty keyboard protocol、HarfBuzz 整形
+2. **v1.2** — GPU 纵深:静态层缓存、多字形图集分页、HDR / 广色域
+3. **v1.3** — pane 尺寸调整、更多光标动画(残影、宽度过渡)
 4. **远期** — 跨平台只保证功能等价,性能优化仍以 Windows 为第一优先
 
 ## 文档索引

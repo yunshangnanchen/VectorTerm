@@ -1,8 +1,8 @@
 # =====================================================================
 # 打 tag 即发布:windows-latest 上编译 → Inno Setup 打包 → 传 GitHub Release
 #
-#   git tag v0.1.0
-#   git push origin v0.1.0
+#   git tag v1.0.0
+#   git push origin v1.0.0
 #
 # 版本号以 tag 为准(tag 去掉前导 v),并回写 Cargo.toml —— 不回写的话
 # exe 的版本资源、安装包的 AppVersion、Apps & features 里显示的三处会打架。

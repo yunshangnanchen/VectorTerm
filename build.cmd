@@ -361,7 +361,7 @@ rem only line starting with "version"; dependencies are written inline.
 set "APPVER="
 for /f "tokens=2 delims== " %%V in ('findstr /b /c:"version" "%PROJ%Cargo.toml"') do if not defined APPVER set "APPVER=%%~V"
 if defined APPVER goto :inst_ver_ok
-set "APPVER=0.1.0"
+set "APPVER=1.0.0"
 echo [build] WARN: could not read the version from Cargo.toml, using %APPVER%
 :inst_ver_ok
 
