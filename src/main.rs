@@ -4293,6 +4293,10 @@ struct GuiState {
     grid_px: (u32, u32),
     /// 拖动缩放时待提交的行列数(连续 resize 期间冻结终端网格)
     resize_settler: ResizeSettler,
+    /// 上一次轮询时是否处在"拖边框缩放"状态。用来抓松手的那个边沿,
+    /// 只在那一下把客户区吸附到整格 + 留白,不在每次唤醒时反复请求
+    /// (会和 Aero Snap 这类系统尺寸打架)。
+    drag_resize_active: bool,
     /// 上一次「同步绘制并 present」的时刻。用来给拖动中过密的 WM_SIZE 节流
     last_sync_present: Instant,
     /// 上一次真正 present 出去的客户区尺寸。`WM_PAINT` 复检用:尺寸和它一致
@@ -4568,6 +4572,21 @@ impl GuiState {
         let bar_h = tab_bar_total_height(&metrics, inner.height as f64, top_inset, show_bar);
         renderer.content_top = if cfg.tab_bar.at_bottom { 0.0 } else { bar_h };
         renderer.content_bottom = if cfg.tab_bar.at_bottom { bar_h } else { 0.0 };
+
+        // 整格缩放的对齐基准是 0、不带 padding,客户区高度于是永远差
+        // `2 * pad % cell_h` 那几像素,全落进上下留白(125% DPI / padding 10
+        // 实测:750 → 顶部 18.5px,配置才 12.5px),得手动拖一下边框才"正常"。
+        // 启动时先吸附到"整数行列 + 留白",首帧就和拖完对齐。
+        // 最大化 / 全屏不能动窗口,那种情况下留白只能按余量浮动。
+        if cfg.use_resize_increments {
+            let (iw, ih) = renderer.snap_window(inner.width, inner.height);
+            if (iw, ih) != (inner.width, inner.height) {
+                inner = match window.request_inner_size(PhysicalSize::new(iw, ih)) {
+                    Some(actual) => actual,
+                    None => PhysicalSize::new(iw, ih),
+                };
+            }
+        }
         let (cols, rows) = renderer.reflow_padding(inner.width, inner.height);
         if profiling {
             crate::wlog!(
@@ -4733,6 +4752,7 @@ impl GuiState {
                 .and_then(term::color_from_str),
             grid_px: (inner.width, inner.height),
             resize_settler: ResizeSettler::new(cfg.resize_debounce_ms),
+            drag_resize_active: false,
             // 启动那一刻已经 present 过首帧,从这里开始计时
             last_sync_present: Instant::now(),
             last_presented: (0, 0),
@@ -4965,10 +4985,40 @@ impl GuiState {
     /// 拖动结束(左键松开)后立刻把冻结期间攒下的目标网格同步一次。
     /// `flush_resize` 只认防抖计时,freeze 的待办计时是空的,得靠这个边沿。
     fn finish_live_resize(&mut self) {
-        if self.resize_settler.is_frozen() && !live_resizing() {
+        let dragging = live_resizing();
+        if self.resize_settler.is_frozen() && !dragging {
             if let Some(grid) = self.resize_settler.take() {
                 self.commit_grid(grid);
             }
+        }
+        // 松手的那一下补一次吸附:缩放步进只保证"整数格",不管 padding,
+        // 残留的零头会全部算进上下留白(见 `Renderer::snap_window`)。
+        // 只在边沿做 —— 每次唤醒都请求会和 Aero Snap 之类的系统尺寸打架。
+        if self.drag_resize_active && !dragging {
+            self.snap_window_to_grid();
+        }
+        self.drag_resize_active = dragging;
+    }
+
+    /// 把客户区吸附到"整数行列 + 四周留白"。
+    ///
+    /// 窗口最大化 / 全屏时不能改尺寸(会退出最大化),那几像素零头只能让
+    /// `reflow_padding` 摊到上下;正常窗口拖完边框后吸附一次,留白就回到
+    /// 配置值,不用再"拖一下才正常"。
+    fn snap_window_to_grid(&mut self) {
+        if !self.cfg.use_resize_increments {
+            return;
+        }
+        if self.window.is_maximized() || self.window.fullscreen().is_some() {
+            return;
+        }
+        let (w, h) = self.grid_px;
+        if w < 100 || h < 100 {
+            return;
+        }
+        let (iw, ih) = self.renderer.snap_window(w, h);
+        if (iw, ih) != (w, h) {
+            let _ = self.window.request_inner_size(PhysicalSize::new(iw, ih));
         }
     }
 

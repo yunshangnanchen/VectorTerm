@@ -1409,6 +1409,23 @@ fn reflow_padding(
     }
 }
 
+/// 客户区尺寸 → "整数行列 + 两侧留白"的尺寸。
+///
+/// `pad_x2` / `pad_y2` 是**两侧留白之和**(垂直方向还要带上标签栏占位)。
+/// 取 `round`:多出来的零头宁可多给半行内容,也不要把窗口缩掉一行。
+fn snap_to_cells(
+    w: f64,
+    h: f64,
+    pad_x2: f64,
+    pad_y2: f64,
+    cell_w: f64,
+    cell_h: f64,
+) -> (f64, f64) {
+    let cols = ((w - pad_x2) / cell_w).round().max(2.0);
+    let rows = ((h - pad_y2) / cell_h).round().max(2.0);
+    (pad_x2 + cols * cell_w, pad_y2 + rows * cell_h)
+}
+
 impl Renderer {
     /// 单元格自设底色的不透明度(`text_background_opacity`)。1.0 = 原色。
     ///
@@ -1629,6 +1646,35 @@ impl Renderer {
             self.pad_y_base,
         );
         (cols, rows)
+    }
+
+    /// 客户区像素尺寸 → 正好放得下"整数行列 + 四周留白"的尺寸。
+    ///
+    /// Windows 的整格缩放只按 `cell_h` 的倍数对齐,基准是 0;但一屏真正需要
+    /// 的高度是 `2 * pad + rows * cell_h`。两者差的 `2 * pad % cell_h` 那几
+    /// 像素永远凑不满一行,只能落进 `reflow_padding` 的余量里 —— 表现为
+    /// "顶部比配置多出一截",而且换个高度(拖一下边框)又变回来。
+    ///
+    /// 125% DPI + `padding = 10` 实测:客户区 750 → 顶部 18.5px(配置 12.5),
+    /// 拖到 736 / 759(都是 23 的倍数)→ 11.5px,看着就"正常"了;而
+    /// `32 * 23 + 2 * 12.5 = 761` 才是顶部正好 12.5 的高度。
+    ///
+    /// 这里只算目标尺寸,要不要真的改窗口由调用方决定(最大化 / 全屏不能动)。
+    /// 取 `round` 而不是 `floor`:宁可多给半行内容,也不要把窗口缩掉一行。
+    pub fn snap_window(&self, w: u32, h: u32) -> (u32, u32) {
+        if self.cell_w <= 0.0 || self.cell_h <= 0.0 {
+            return (w, h);
+        }
+        let pad_y2 = 2.0 * self.pad_y_base + self.content_top + self.content_bottom;
+        let (iw, ih) = snap_to_cells(
+            w as f64,
+            h as f64,
+            2.0 * self.pad_x,
+            pad_y2,
+            self.cell_w,
+            self.cell_h,
+        );
+        (iw.max(80.0) as u32, ih.max(60.0) as u32)
     }
 
     pub fn cell_rect(&self, col: usize, row: usize) -> CellRect {
@@ -4180,18 +4226,57 @@ mod tests {
 
     // --- 行数与留白:输入行既不能贴边,也不能悬在半空 ----------------
     /// 极简配置(1250×750 / 14号字 / padding 10 × 1.25 DPI = 12.5px):
-    /// 余量 12px ≈ 0.52 行,补贴要吃掉 11px —— 会把总余量压到 14px,
-    /// 给不出和别的预设一样的底边。所以不补贴,31 行,底边固定 14.5px。
+    /// 750 本身**不是**"整格 + 留白"的高度(32*23+25 = 761),37px 零头只能
+    /// 摊成上下 18.5px —— 这就是"顶部比配置多出一截"。窗口吸附到 761 之后
+    /// 余量正好是两侧留白,顶部回到 12.5px。
     #[test]
     fn reflow_minimal_matches_other_presets_at_bottom() {
         let base = 12.5;
-        let rows = fit_rows(725.0, 23.0, base);
+        let cell_h = 23.0;
+        // 未吸附:零头 37px 摊成 18.5 / 18.5
+        let rows = fit_rows(750.0 - 2.0 * base, cell_h, base);
         assert_eq!(rows, 31);
-        let top = reflow_padding(750.0, 0.0, 0.0, rows, 23.0, base);
+        let top = reflow_padding(750.0, 0.0, 0.0, rows, cell_h, base);
         let bottom = 750.0 - top - rows as f64 * 23.0;
-        // 余量 37px > 2×(12.5+2):两侧各拿 anchor 再平分剩下的,两边一样高
         assert!((top - bottom).abs() < 0.51, "上下应等距:{top:.1} vs {bottom:.1}");
-        assert!((top - 18.5).abs() < 0.01, "两侧各 18.5px:{top:.1}px");
+        assert!((top - 18.5).abs() < 0.01, "未吸附时零头全进留白:{top:.1}px");
+
+        // 吸附到 32 行 + 上下留白 = 761,顶部正好是配置值
+        let (_, h) = snap_to_cells(1250.0, 750.0, 2.0 * base, 2.0 * base, 11.0, cell_h);
+        assert_eq!(h, 761.0, "32*23 + 2*12.5");
+        let rows = fit_rows(h - 2.0 * base, cell_h, base);
+        let top = reflow_padding(h, 0.0, 0.0, rows, cell_h, base);
+        let bottom = h - top - rows as f64 * cell_h;
+        assert_eq!(rows, 32);
+        assert!((top - base).abs() < 0.01, "吸附后顶部应回到 {base}px:{top:.1}");
+        assert!((bottom - base).abs() < 0.01, "吸附后底部应回到 {base}px:{bottom:.1}");
+    }
+
+    /// 拖边框之后窗口高度都是 `cell_h` 的倍数(713 / 736 / 759 / 782…),
+    /// 这些高度都不带 padding 基准。吸附一次就必须让上下留白回到配置值 ——
+    /// 消掉"拖一下边框才正常"那个动作。
+    #[test]
+    fn snap_window_restores_padding_after_any_drag() {
+        let (base, cell_w, cell_h) = (12.5, 11.0, 23.0);
+        for h0 in [713.0, 736.0, 759.0, 782.0, 805.0] {
+            let (_, h) = snap_to_cells(1250.0, h0, 2.0 * base, 2.0 * base, cell_w, cell_h);
+            let rows = fit_rows(h - 2.0 * base, cell_h, base);
+            let top = reflow_padding(h, 0.0, 0.0, rows, cell_h, base);
+            let bottom = h - top - rows as f64 * cell_h;
+            assert!(
+                (top - base).abs() < 0.01 && (bottom - base).abs() < 0.01,
+                "h0={h0} → h={h} 留白 {top:.1}/{bottom:.1}(应 {base})"
+            );
+        }
+    }
+
+    /// 吸附是幂等的:已经是"整格 + 留白"的尺寸不能再被改走一格。
+    #[test]
+    fn snap_window_is_idempotent() {
+        let (base, cell_w, cell_h) = (12.5, 11.0, 23.0);
+        let (w1, h1) = snap_to_cells(1250.0, 750.0, 2.0 * base, 2.0 * base, cell_w, cell_h);
+        let (w2, h2) = snap_to_cells(w1, h1, 2.0 * base, 2.0 * base, cell_w, cell_h);
+        assert_eq!((w1, h1), (w2, h2), "再吸附一次尺寸不能变");
     }
 
     /// 有标签栏时顶部占 43px,行数余数不同,但**上下依然等距**。
