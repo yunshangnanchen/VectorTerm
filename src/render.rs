@@ -519,8 +519,8 @@ enum GlyphRole {
 
 fn glyph_role(ch: char) -> GlyphRole {
     match ch as u32 {
-        // Powerline 分隔符(实心/空心三角、半圆):水平方向要与相邻格拼死
-        0xE0B0..=0xE0B7 => GlyphRole::Separator,
+        // Powerline 分隔符(实心/空心三角、半圆、角块):整组都由几何绘制
+        0xE0B0..=0xE0BF => GlyphRole::Separator,
         // 制表符(细/粗/双线/圆角/虚线)
         0x2500..=0x257F => GlyphRole::BoxGlyph,
         // 网点阴影(░▒▓)。它们是图案不是实心块,不能当矩形铺满,
@@ -535,6 +535,202 @@ fn glyph_role(ch: char) -> GlyphRole {
 const ICON_RATIO: f64 = 1.10;
 /// 墨迹高过数字的这个倍数,就判定它"画满了 em 框",重新栅格化小一档。
 const ICON_OVERSIZE: f64 = 1.12;
+
+/// Powerline 分隔符的矢量路径(单位坐标:0..1 = 一个格子,原点在格子左上角)。
+///
+/// 坐标逐点抄自 wezterm 的 `wezterm-gui/src/customglyph.rs`
+/// (`BlockKey::from_char` 里 U+E0B0..U+E0BF 那一组 `Poly`)。wezterm 对这几个
+/// 码位**根本不看字体**:它们本来就是"拼色块的几何图形",而字体里的箭头/半圆
+/// 是画在 em 框里的,左右各带留白、上下也未必顶到格线 —— 一旦按格子铺开,
+/// 相邻色块之间就会露出 1~2 像素的背景缝,半圆还会被压成椭圆。
+///
+/// Oh My Posh 的 `powerline` / `diamond` 风格整行都是这种符号,那条缝会连成
+/// 一条竖线,看起来就是"渲染坏了"。
+enum SepPath {
+    /// 实心多边形(已把二次贝塞尔展平)
+    Fill(Vec<(f64, f64)>),
+    /// 折线描边,线宽由调用方给(与制表符同一条 `cell_h/14` 的线宽)
+    Stroke(Vec<(f64, f64)>),
+}
+
+/// 二次贝塞尔展平:控制点 `c`、终点 `b`,起点是 `out` 的最后一个点。
+fn quad_to(out: &mut Vec<(f64, f64)>, c: (f64, f64), b: (f64, f64)) {
+    const STEPS: usize = 12;
+    let a = *out.last().expect("起点已压入");
+    for i in 1..=STEPS {
+        let t = i as f64 / STEPS as f64;
+        let u = 1.0 - t;
+        out.push((
+            u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
+            u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
+        ));
+    }
+}
+
+/// 一条只有起终点的曲线(wezterm 里 `MoveTo` + 单个 `QuadTo` 的描边路径)。
+fn quad_curve(a: (f64, f64), c: (f64, f64), b: (f64, f64)) -> Vec<(f64, f64)> {
+    let mut out = vec![a];
+    quad_to(&mut out, c, b);
+    out
+}
+
+/// 一个分隔符码位的几何。`None` = 不是分隔符。
+///
+/// 说明中括号里的名字来自 Powerline / Nerd Font,方便和 wezterm 的注释对上。
+fn sep_path(ch: char) -> Option<SepPath> {
+    use SepPath::{Fill, Stroke};
+    let mut fill = |pts: Vec<(f64, f64)>| Some(Fill(pts));
+    let stroke = |pts: Vec<(f64, f64)>| Some(Stroke(pts));
+    match ch as u32 {
+        // [] 实心右箭头:左沿一条竖线,尖端在右中
+        0xE0B0 => fill(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 0.5)]),
+        // [] 空心右箭头(人字形)
+        0xE0B1 => stroke(vec![(0.0, 0.0), (1.0, 0.5), (0.0, 1.0)]),
+        // [] 实心左箭头
+        0xE0B2 => fill(vec![(1.0, 0.0), (1.0, 1.0), (0.0, 0.5)]),
+        // [] 空心左箭头
+        0xE0B3 => stroke(vec![(1.0, 0.0), (0.0, 0.5), (1.0, 1.0)]),
+        // [] 实心左半圆:平边贴左,向右鼓出
+        0xE0B4 => {
+            let mut p = vec![(0.0, 0.0)];
+            quad_to(&mut p, (1.0, 0.0), (1.0, 0.5));
+            quad_to(&mut p, (1.0, 1.0), (0.0, 1.0));
+            fill(p)
+        }
+        // [] 空心左半圆:控制点故意放到格子外,弧顶才不贴边
+        0xE0B5 => stroke(quad_curve(
+            (-0.25, -1.0 / 3.0),
+            (1.75, 0.5),
+            (-0.25, 4.0 / 3.0),
+        )),
+        // [] 实心右半圆:平边贴右,向左鼓出
+        0xE0B6 => {
+            let mut p = vec![(1.0, 0.0)];
+            quad_to(&mut p, (0.0, 0.0), (0.0, 0.5));
+            quad_to(&mut p, (0.0, 1.0), (1.0, 1.0));
+            fill(p)
+        }
+        // [] 空心右半圆
+        0xE0B7 => stroke(quad_curve(
+            (1.25, -1.0 / 3.0),
+            (-0.75, 0.5),
+            (1.25, 4.0 / 3.0),
+        )),
+        // [] 实心左下角(中线到左下、右下的两个三角拼起来)
+        0xE0B8 => fill(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]),
+        // [] 左下对角线
+        0xE0B9 => stroke(vec![(0.0, 0.0), (1.0, 1.0)]),
+        // [] 实心右下角
+        0xE0BA => fill(vec![(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5)]),
+        // [] 右下对角线
+        0xE0BB => stroke(vec![(0.0, 1.0), (1.0, 0.0)]),
+        // [] 实心左上角(左下到右上那条对角线切出来的上半)
+        0xE0BC => fill(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 0.0)]),
+        // [] 左上对角线
+        0xE0BD => stroke(vec![(0.0, 1.0), (1.0, 0.0)]),
+        // [] 实心右上角
+        0xE0BE => fill(vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.5, 0.5)]),
+        // [] 右上对角线
+        0xE0BF => stroke(vec![(0.0, 0.0), (1.0, 1.0)]),
+        _ => None,
+    }
+}
+
+/// 多边形填充测试(射线法,奇偶规则)。点用像素坐标。
+fn point_in_poly(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if (yi > py) != (yj > py) {
+            let x = xi + (py - yi) / (yj - yi) * (xj - xi);
+            if px < x {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// 点到折线的最短距离(像素)。用来画空心箭头/半圆。
+fn dist_to_polyline(px: f64, py: f64, pts: &[(f64, f64)]) -> f64 {
+    let mut best = f64::MAX;
+    for w in pts.windows(2) {
+        let (ax, ay) = w[0];
+        let (bx, by) = w[1];
+        let (dx, dy) = (bx - ax, by - ay);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 > 1e-9 {
+            (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (qx, qy) = (ax + t * dx, ay + t * dy);
+        best = best.min(((px - qx).powi(2) + (py - qy).powi(2)).sqrt());
+    }
+    best
+}
+
+/// 把分隔符光栅化成 `w × h` 的 alpha 蒙版(4×4 超采样,17 级灰度)。
+///
+/// 位图尺寸就是**格子尺寸**,形状坐标正好铺到 0..w / 0..h —— 因此左右上下
+/// 都会顶到格子边界,和相邻格子的底色严丝合缝,不会再出现那条 1px 的缝。
+fn sep_mask(ch: char, w: u32, h: u32, stroke_w: f64) -> Option<Vec<u8>> {
+    let path = sep_path(ch)?;
+    let (w, h) = (w.max(1), h.max(1));
+    let (fw, fh) = (w as f64, h as f64);
+    let to_px = |p: &[(f64, f64)]| -> Vec<(f64, f64)> {
+        p.iter().map(|(x, y)| (x * fw, y * fh)).collect()
+    };
+    const S: usize = 4; // 每像素 4×4 采样
+    let mut data = vec![0u8; (w * h) as usize];
+    match path {
+        SepPath::Fill(pts) => {
+            let poly = to_px(&pts);
+            for y in 0..h {
+                for x in 0..w {
+                    let mut hit = 0u32;
+                    for sy in 0..S {
+                        for sx in 0..S {
+                            let px = x as f64 + (sx as f64 + 0.5) / S as f64;
+                            let py = y as f64 + (sy as f64 + 0.5) / S as f64;
+                            if point_in_poly(px, py, &poly) {
+                                hit += 1;
+                            }
+                        }
+                    }
+                    data[(y * w + x) as usize] =
+                        ((hit as f64 / (S * S) as f64) * 255.0).round() as u8;
+                }
+            }
+        }
+        SepPath::Stroke(pts) => {
+            let poly = to_px(&pts);
+            // 线宽至少 1px,否则细线在 4×4 采样下会断成一串点
+            let half = (stroke_w.max(1.0)) / 2.0;
+            for y in 0..h {
+                for x in 0..w {
+                    let mut hit = 0u32;
+                    for sy in 0..S {
+                        for sx in 0..S {
+                            let px = x as f64 + (sx as f64 + 0.5) / S as f64;
+                            let py = y as f64 + (sy as f64 + 0.5) / S as f64;
+                            if dist_to_polyline(px, py, &poly) <= half {
+                                hit += 1;
+                            }
+                        }
+                    }
+                    data[(y * w + x) as usize] =
+                        ((hit as f64 / (S * S) as f64) * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+    Some(data)
+}
 
 /// 块元素在格子里的填充区域(比例坐标,原点在格子左上角)。
 type BlockRect = (f64, f64, f64, f64);
@@ -951,6 +1147,10 @@ pub struct Renderer {
     pub cell_h: f64,
     pub ascent: f64,
     pub pad_x: f64,
+    /// 配置里写的垂直留白。`pad_y` 每次重排会按"剩余空间均分"重算,
+    /// 这个值保持原样,避免反复 resize 时越减越少。
+    pub pad_y_base: f64,
+    /// 实际生效的垂直留白(上下各这么多)。见 `reflow_padding`。
     pub pad_y: f64,
     /// 标签栏占掉的顶部像素(0 = 无标签栏)
     pub content_top: f64,
@@ -962,6 +1162,12 @@ pub struct Renderer {
     /// 非正文字号(状态栏 `font_scale`)的字形缓存:键里带字号百分比,
     /// 同一字符在不同字号下各有一份**按该尺寸真实栅格化**的位图。
     sized_cache: HashMap<(char, u8, u32), Option<u32>>,
+    /// Powerline 分隔符的几何蒙版。键 = (码位, 像素宽, 像素高)。
+    ///
+    /// 不进 `glyphs` 的按需缓存是因为它和字体无关:同一码位在格子尺寸变了
+    /// 之后必须重新生成,而字形缓存是按"字符 + 样式"索引的,混在一起会把
+    /// 旧尺寸的位图拿回来用。
+    seps: HashMap<(char, u32, u32), u32>,
     /// 图形协议(iTerm2 / Kitty / sixel)的解码结果,按内容哈希缓存
     pub images: crate::images::ImageCache,
     /// 内嵌的彩色 emoji 字体(CBDT 位图);None = 字体损坏/被裁掉
@@ -987,6 +1193,63 @@ pub struct Renderer {
     pub cursor_blink_phase: f32,
     /// 常驻动画的累计时间(秒),主循环每帧下发
     pub cursor_anim_t: f64,
+}
+
+/// 从可用高度里定行数。
+///
+/// 行高由字体度量定死,除不尽的余量只能留在底部。一律 `floor` 的话余量最多
+/// 接近一整行 —— 底部看着像"多空了一行",那块空白又不随输出滚动,容易被
+/// 当成输入行没跟到底。所以余量过半时再吃一行(补贴),把这段余量从"底部
+/// 空白"变成"多一行内容"。
+///
+/// 但**吃不吃得起**要看留白够不够:补贴会把末行往下推,推掉的部分得从
+/// padding 里借。借光了输入行就贴到边框上(极简配置没有标签栏占高,1250×750 /
+/// 14 号字 / 高 DPI 下曾只剩 2px)。所以要求借完之后还能剩 2px 以上,
+/// 不够就不吃 —— 余量够大时照旧吃,不能让"底部多空一行"的老毛病回来。
+///
+/// 这里**只定行数**,不决定留白,分配在 `reflow_padding`(底边固定、
+/// 余下的全给顶部)。
+fn fit_rows(usable: f64, cell_h: f64, pad_y: f64) -> usize {
+    if cell_h <= 0.0 {
+        return 2;
+    }
+    let raw = usable / cell_h;
+    let mut rows = raw.floor();
+    let rem = usable - rows * cell_h;
+    // 补贴之后仍要给上下各留够 padding:吃掉的量不能超过 pad_y - 2。
+    // 高 DPI 下 padding 10 → 12.5px,极简配置补贴完总共只剩 14px,
+    // 底边就会比有标签栏的配置少 3px —— 输入行看着像"没跟到底"。
+    if rem > cell_h * 0.5 && cell_h - rem + 2.0 <= pad_y {
+        rows += 1.0;
+    }
+    (rows as i64).max(2) as usize
+}
+
+/// 行数定了之后,决定窗口里没被行占掉的垂直空间怎么分。
+///
+/// 行高由字体定死,窗口高又很少正好是整数倍,多出来的像素必须落在某一侧。
+/// 以前按上下均分:极简配置补贴一行后总共只剩 14px,底边 7px;有标签栏的
+/// 配置则是 12~15px —— 同一个 `padding=10`,输入行离底多远全看行数余数,
+/// 看起来就像"窗口没更新输入行的最低位置"。
+///
+/// 现在底边是**定值**:配置 padding + 字形到格子底边的 2px 视觉余量。
+/// 顶点把余下的都吃掉。滚动满屏时顶部那一行本来就会被裁,底部稳定更重要;
+/// 窗口很高时多出来的空白堆在顶部,不会把输入行吊在半空。
+fn reflow_padding(
+    h: f64,
+    content_top: f64,
+    content_bottom: f64,
+    rows: usize,
+    cell_h: f64,
+    pad_y_base: f64,
+) -> f64 {
+    let spare = (h - content_top - content_bottom - rows as f64 * cell_h).max(0.0);
+    const OPTICAL_GAP: f64 = 2.0;
+    let bottom = (pad_y_base + OPTICAL_GAP)
+        .min(spare - OPTICAL_GAP)
+        .max(OPTICAL_GAP);
+    // 调用方拿到的是**顶**留白(origin_y),底边是剩余部分
+    (spare - bottom).max(0.0)
 }
 
 impl Renderer {
@@ -1107,12 +1370,14 @@ impl Renderer {
             cell_h,
             ascent,
             pad_x: cfg.padding * scale,
+            pad_y_base: cfg.padding * scale,
             pad_y: cfg.padding * scale,
             content_top: 0.0,
             content_bottom: 0.0,
             glyphs: Vec::new(),
             cache: HashMap::new(),
             sized_cache: HashMap::new(),
+            seps: HashMap::new(),
             images: crate::images::ImageCache::new(cfg.images.max_memory_mb),
             emoji: crate::emoji::EmojiFont::load(crate::builtin_fonts::EMOJI_BYTES),
             emoji_cache: HashMap::new(),
@@ -1165,20 +1430,39 @@ impl Renderer {
 
     pub fn compute_grid(&self, w: u32, h: u32) -> (usize, usize) {
         let cols = ((((w as f64 - 2.0 * self.pad_x) / self.cell_w).floor() as i64).max(2)) as usize;
-        let usable = h as f64 - self.content_top - self.content_bottom - 2.0 * self.pad_y;
-        // 行数除不尽的余量没法摊到行里(行高由字体度量定死),只能留在底部。
-        // 一律 floor 的话,余量最大能接近**一整行** —— 底部看起来就像"多空了
-        // 一行",而且这行空白不随输出滚动,很容易被当成输入行没跟着走。
-        // 这里改成取"底边距最接近 padding 的那一档":余量超过半行就再吃一行,
-        // 让末行往下压 (cell_h - 余量)。压进 padding 的部分不超过 padding
-        // 本身,所以永远不会顶到窗口边框;标签栏在下方时由 clip_bottom 收边。
-        let raw = usable / self.cell_h;
-        let mut rows = raw.floor();
-        let rem = usable - rows * self.cell_h;
-        if rem > self.cell_h * 0.5 && self.cell_h - rem <= self.pad_y {
-            rows += 1.0;
+        // 用配置原值算,不能用 `pad_y`:它每次重排都会被均分改掉,拿来当
+        // base 会在反复 resize 时越减越小。
+        let usable = h as f64 - self.content_top - self.content_bottom - 2.0 * self.pad_y_base;
+        let rows = fit_rows(usable, self.cell_h, self.pad_y_base);
+        (cols, rows)
+    }
+
+    /// 行数定下来之后,决定没被行占掉的垂直空间怎么分,写回 `pad_y`,
+    /// 并把 `(列数, 行数)` 一起返回 —— 调用方本来就要这两个数,顺手带出去
+    /// 就不用再跑一遍 `compute_grid`。
+    ///
+    /// 只在窗口 / 标签栏几何真正变化时调(`update_geometry`、启动校准);
+    /// 鼠标命中那些只读路径只调 `compute_grid`,不会误改留白。
+    pub fn reflow_padding(&mut self, w: u32, h: u32) -> (usize, usize) {
+        let (cols, rows) = self.compute_grid(w, h);
+        if std::env::var_os("VECTORTERM_PAD_TRACE").is_some() {
+            eprintln!(
+                "[pad] h={h} top={:.1} bottom={:.1} rows={rows} cell_h={:.1} base={:.1} spare={:.1}",
+                self.content_top,
+                self.content_bottom,
+                self.cell_h,
+                self.pad_y_base,
+                h as f64 - self.content_top - self.content_bottom - rows as f64 * self.cell_h
+            );
         }
-        let rows = (rows as i64).max(2) as usize;
+        self.pad_y = reflow_padding(
+            h as f64,
+            self.content_top,
+            self.content_bottom,
+            rows,
+            self.cell_h,
+            self.pad_y_base,
+        );
         (cols, rows)
     }
 
@@ -1199,6 +1483,36 @@ impl Renderer {
             w: self.cell_w,
             h: self.cell_h,
         }
+    }
+
+    /// 取一个分隔符的位图下标:第一次见时按**当前格子尺寸**生成几何蒙版。
+    ///
+    /// 和 `glyph()` 分开是因为它压根不查字体:Oh My Posh 的 powerline 段落
+    /// 常年在主字体里没有对应字形(要装 Nerd Font 才有),此时 `glyph()` 返回
+    /// None,而这里的几何永远画得出来。
+    fn separator(&mut self, ch: char, w: u32, h: u32) -> Option<u32> {
+        if let Some(id) = self.seps.get(&(ch, w, h)) {
+            return Some(*id);
+        }
+        // 线宽与制表符同一套算法(见 `build_frame` 里的 `th`),细线才不会比
+        // 上下两个色块的接缝还粗
+        let stroke = (h as f64 / 14.0).ceil().max(1.0);
+        let data = sep_mask(ch, w, h, stroke)?;
+        let g = CachedGlyph {
+            w,
+            h,
+            left: 0,
+            top: 0,
+            advance: w as f32,
+            ascent: h as f32,
+            descent: 0.0,
+            synthetic_bold: false,
+            data,
+        };
+        self.glyphs.push(g);
+        let id = (self.glyphs.len() - 1) as u32;
+        self.seps.insert((ch, w, h), id);
+        Some(id)
     }
 
     /// 取字形位图的下标(按需栅格化并缓存)
@@ -2764,6 +3078,31 @@ impl Renderer {
                 pen += cell_span;
                 continue;
             }
+            // Powerline 分隔符(E0B0..E0BF):**不查字体**,直接用几何画。
+            // 必须放在 `self.glyph()` 之前 —— 主字体没有这些码位时(没装 Nerd
+            // Font 的常见情况)字形查找会返回 None,几何却是永远画得出来的。
+            if glyph_role(ch) == GlyphRole::Separator {
+                // 目标矩形必须和**单元格底色**的像素范围完全重合。
+                //
+                // 底色是 `frame.rect(cx, y, cell_w, cell_h)` 画的,CPU 端按
+                // `floor(x) .. ceil(x+w)` 取整,相邻格因此会重叠一列、由后画的
+                // 那格盖掉。如果这里改用 `round()` 落位,格子起点带小数时箭头
+                // 会被推到右边 1 像素,左边那一列就露出后一段的底色 —— 又变成
+                // 一条竖缝;右边还会多盖掉下一格 1 像素。
+                // 所以统一按 `floor` 算边界,宽度取"两条边各自取整后相减",
+                // 和 `block_rects` 处理方块元素的口径一致。
+                let x0 = ox.floor();
+                let y0 = cell_top.floor();
+                let w = ((ox + cell_span).floor() - x0).max(1.0);
+                let h = ((cell_top + cell_h).floor() - y0).max(1.0);
+                if let Some(id) = self.separator(ch, w as u32, h as u32) {
+                    // 蒙版尺寸与目标尺寸相同才会走 `blit_glyph` 的 1:1 快路径:
+                    // alpha 原样拷贝、不做重采样,边缘不会被打成半透明。
+                    frame.glyph(id, (0.0, 0.0, w, h), (x0, y0, w, h), color, false, false);
+                }
+                pen += cell_span;
+                continue;
+            }
             let Some(id) = self.glyph(ch, style) else {
                 continue;
             };
@@ -2772,28 +3111,8 @@ impl Renderer {
             let gh = g.h as f64;
             let bold = g.synthetic_bold;
             match glyph_role(ch) {
+                // 上面已经拦掉了;留着这个分支只为让 match 保持穷举
                 GlyphRole::Separator => {
-                    // Powerline 分隔符:本身就是"填满整格"的纯几何图形。
-                    // 直接映射到格子矩形(允许非等比),这样箭头一定贴住
-                    // 上下边界、水平方向压住相邻格,色块之间不会有缝。
-                    frame.glyph(
-                        id,
-                        (0.0, 0.0, gw, gh),
-                        (ox, cell_top, cell_span, cell_h),
-                        color,
-                        false,
-                        false,
-                    );
-                    if bold {
-                        frame.glyph(
-                            id,
-                            (0.0, 0.0, gw, gh),
-                            (ox + 1.0, cell_top, cell_span, cell_h),
-                            color,
-                            false,
-                            false,
-                        );
-                    }
                     pen += cell_span;
                 }
                 GlyphRole::BoxGlyph => {
@@ -2834,15 +3153,45 @@ impl Renderer {
                     pen += cell_span;
                 }
                 GlyphRole::Icon => {
-                    let s = (cell_span / gw).min(cell_h / gh).min(1.0);
-                    let (dw, dh) = (gw * s, gh * s);
-                    let dx = ox + (cell_span - dw) / 2.0;
-                    let mut dy = baseline + g.top as f64 * s;
-                    // 夹进格子:图标字体的升部/降部与主字体不同,不夹会串行
-                    dy = dy.clamp(cell_top, (cell_top + cell_h - dh).max(cell_top));
+                    // 图标按**字体原尺寸**画,不往单元格里挤。
+                    //
+                    // wezterm 对 Nerd Font 私有区的处理就是这样:字形 shaping 出来
+                    // 多大就画多大,允许越过格子边界(终端网格只按 wcwidth 给它
+                    // 一格)。以前这里用 `min(cell_w/gw, cell_h/gh, 1)` 硬塞,
+                    // 内置 "Nerd Font Symbols" 的图标墨迹 ~18px、advance 20px,
+                    // 被压进 11px 的格子只剩六成 —— 这就是 OMP 的 Windows 图标
+                    // 比文字小一圈的原因。
+                    //
+                    // 垂直方向也不能按字形顶边摆:Nerd Font 各套图标的墨迹高度
+                    // 能从 0.6em 跨到 1.2em。和状态栏一样拿数字 `0` 的墨迹当
+                    // 基准,把接近文字高度的图标**按目标尺寸重新栅格化**(放大
+                    // 也缩小的,不是拉伸位图),再把墨迹中线对齐文字中线。
+                    // 故意只画半个字高的图标(月亮那种)保持原样,不硬撑大。
+                    let (band_c, band_h) = self.text_band(style, 1.0);
+                    let mut id = id;
+                    if band_h > 1.0 && gh >= band_h * 0.6 {
+                        let want = band_h * ICON_RATIO;
+                        if (gh - want).abs() > 1.0 {
+                            if let Some(sized) = self.glyph_scaled(ch, style, want / gh) {
+                                id = sized;
+                            }
+                        }
+                    }
+                    let g2 = &self.glyphs[id as usize];
+                    let (gw, gh) = (g2.w as f64, g2.h as f64);
+                    let dw = gw;
+                    let dh = gh;
+                    // 比一格窄才居中;比一格宽就左对齐 —— 让它往**右边**的空格
+                    // 溢出,而不是压到左边上一段的箭头/菱形上。
+                    let dx = ox + ((cell_span - dw) * 0.5).max(0.0);
+                    let dy = if band_h > 1.0 {
+                        baseline + band_c - dh / 2.0
+                    } else {
+                        baseline + g2.top as f64
+                    };
                     let dst = (dx, dy, dw, dh);
                     frame.glyph(id, (0.0, 0.0, gw, gh), dst, color, style.italic, false);
-                    if bold {
+                    if g2.synthetic_bold {
                         frame.glyph(
                             id,
                             (0.0, 0.0, gw, gh),
@@ -3364,33 +3713,26 @@ impl Canvas<'_> {
         // 内圈实心区(去掉圆角前的四角圆心矩形):落在里面直接跳过
         let (kx0, ky0) = (ix + ri, iy + ri);
         let (kx1, ky1) = (ix + iw - ri, iy + ih - ri);
+        // 外圈覆盖率减内圈覆盖率。两条分支(中间行 / 四角行)必须共用这一步
+        // —— 之前中间行只算了外圈,整条竖边被填成 `radius` 像素宽的白条,
+        // 上下两条边却还是细的,看起来像左右各贴了一条突兀的长条。
+        let stroke_cov = |cx: f32, cy: f32| -> f32 {
+            let cov_out = (0.5 - sdf(cx, cy, ox, oy, ow, oh, rf)).clamp(0.0, 1.0);
+            if cov_out <= 0.0 {
+                return 0.0;
+            }
+            let cov_in = (0.5 - sdf(cx, cy, ix, iy, iw, ih, ri)).clamp(0.0, 1.0);
+            (cov_out - cov_in).max(0.0)
+        };
         for py in y0..y1 {
             let cy = py as f32 + 0.5;
-            if cy > ky0 && cy < ky1 {
-                // 中间的行只剩左右两条竖边要算
-                for px in x0..x1 {
-                    let cx = px as f32 + 0.5;
-                    if cx > kx0 && cx < kx1 {
-                        continue;
-                    }
-                    let d = sdf(cx, cy, ox, oy, ow, oh, rf);
-                    let cov = (0.5 - d).clamp(0.0, 1.0);
-                    if cov > 0.0 {
-                        self.blend(px, py, c, alpha * cov);
-                    }
-                }
-                continue;
-            }
             for px in x0..x1 {
                 let cx = px as f32 + 0.5;
-                let d_out = sdf(cx, cy, ox, oy, ow, oh, rf);
-                let cov_out = (0.5 - d_out).clamp(0.0, 1.0);
-                if cov_out <= 0.0 {
+                // 中间行只有左右两条竖边要算:四角圆心矩形内部整块跳过
+                if cy > ky0 && cy < ky1 && cx > kx0 && cx < kx1 {
                     continue;
                 }
-                let d_in = sdf(cx, cy, ix, iy, iw, ih, ri);
-                let cov_in = (0.5 - d_in).clamp(0.0, 1.0);
-                let cov = cov_out - cov_in;
+                let cov = stroke_cov(cx, cy);
                 if cov > 0.0 {
                     self.blend(px, py, c, alpha * cov);
                 }
@@ -3603,6 +3945,85 @@ mod tests {
         AppConfig, CursorAnimation, CursorBlinkMode, CursorBlinkStyle, CursorShapeOverride,
     };
     use wezterm_term::TerminalSize;
+
+    // --- 行数与留白:输入行既不能贴边,也不能悬在半空 ----------------
+    /// 极简配置(1250×750 / 14号字 / padding 10 × 1.25 DPI = 12.5px):
+    /// 余量 12px ≈ 0.52 行,补贴要吃掉 11px —— 会把总余量压到 14px,
+    /// 给不出和别的预设一样的底边。所以不补贴,31 行,底边固定 14.5px。
+    #[test]
+    fn reflow_minimal_matches_other_presets_at_bottom() {
+        let base = 12.5;
+        let rows = fit_rows(725.0, 23.0, base);
+        assert_eq!(rows, 31);
+        let top = reflow_padding(750.0, 0.0, 0.0, rows, 23.0, base);
+        let bottom = 750.0 - top - rows as f64 * 23.0;
+        assert!((bottom - 14.5).abs() < 0.01, "底边 {bottom:.1}px");
+        assert!((top - 22.5).abs() < 0.01, "多出来的空间堆在顶部:{top:.1}px");
+    }
+
+    /// 有标签栏时顶部占 43px,行数余数不同,但底边距必须还是 14.5px。
+    #[test]
+    fn reflow_keeps_bottom_gap_when_tab_bar_on_top() {
+        let top_bar = 43.0;
+        let base = 12.5;
+        let usable = 750.0 - top_bar - 2.0 * base;
+        let rows = fit_rows(usable, 23.0, base);
+        let top = reflow_padding(750.0, top_bar, 0.0, rows, 23.0, base);
+        let bottom = 750.0 - top_bar - top - rows as f64 * 23.0;
+        assert_eq!(rows, 30);
+        assert!((bottom - 14.5).abs() < 0.01, "底边 {bottom:.1}");
+    }
+
+    /// 余量 19px 时仍要补贴,否则底部会像多空了一行(不能一刀切掉补贴)。
+    #[test]
+    fn fit_rows_still_eats_when_remainder_large() {
+        assert_eq!(fit_rows(31.0 * 23.0 + 19.0, 23.0, 10.0), 32);
+    }
+
+    /// 余量不到半行:没有补贴的理由;padding=0 也永远不借。
+    #[test]
+    fn fit_rows_floor_when_remainder_small_or_no_padding() {
+        assert_eq!(fit_rows(31.0 * 23.0 + 3.0, 23.0, 10.0), 31);
+        assert_eq!(fit_rows(730.0, 23.0, 0.0), 31);
+        assert_eq!(fit_rows(-50.0, 23.0, 10.0), 2); // 至少两行
+    }
+
+    // --- CPU 描边:四条边必须一样粗 ---------------------------------
+    /// 回归测试:中间行不能只算外圈 SDF。以前这里漏减内圈,竖边会被填成
+    /// 圆角半径那么宽,而上下两条边仍是线宽那么细 —— 失焦白边看起来就是
+    /// 左右各贴了一条突兀的长条。
+    #[test]
+    fn cpu_stroke_round_rect_keeps_all_four_edges_thin() {
+        let (w, h) = (60u32, 40u32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        {
+            let mut canvas = Canvas {
+                buf: &mut buf,
+                w,
+                h,
+                clip_top: 0,
+                clip_bottom: h as i32,
+                clip_l: 0,
+                clip_r: w as i32,
+            };
+            canvas.stroke_round_rect(
+                0.0,
+                0.0,
+                w as f64,
+                h as f64,
+                8.0,
+                2.0,
+                Rgb { r: 255, g: 255, b: 255 },
+                1.0,
+            );
+        }
+        let lit = |x: usize, y: usize| buf[y * w as usize + x] != 0;
+        let left: Vec<usize> = (0..12).filter(|&x| lit(x, h as usize / 2)).collect();
+        let top: Vec<usize> = (0..12).filter(|&y| lit((w / 2) as usize, y)).collect();
+        assert!(left.len() <= 3, "左竖边被填成 {left:?}");
+        assert!(top.len() <= 3, "上横边被填成 {top:?}");
+        assert!(!lit(10, h as usize / 2), "矩形内部不该有描边像素");
+    }
 
     // --- 光标本体:形状 / 尺寸 / 闪烁 / 动画 ---------------------------
     /// 这一帧里所有「光标色」的实心矩形。终端内容为空,不会混进文字笔画。
@@ -3858,6 +4279,8 @@ mod tests {
             '\u{f121}',
             '\u{f00c}',
             '\u{f017}',
+            '\u{f17a}',
+            '\u{e62a}',
             '\u{e725}',
             '\u{e718}',
             '\u{f0001}',
@@ -3931,6 +4354,84 @@ mod tests {
             row_text(&back.rows[0]).starts_with("L"),
             "回看 3 行后首行应是更早的输入行,实际为 {:?}",
             row_text(&back.rows[0])
+        );
+    }
+
+    /// 分隔符的几何蒙版必须顶到格子四边。
+    ///
+    /// 这条回归盯的是"用字体位图铺格子"那个老做法的病根:字体里的箭头/半圆
+    /// 画在 em 框里、左右带留白,铺满格子后左右各留 1~2 像素的背景色 ——
+    /// Oh My Posh 每一段之间就会有一条竖缝。几何蒙版必须做到:
+    /// 1. 没有任何一列完全空(空列 = 缝);
+    /// 2. 上下沿有墨(否则行与行之间露缝);
+    /// 3. 平边(箭头靠背景那一侧、半圆的平边)整列不透明。
+    #[test]
+    fn separator_mask_touches_cell_edges() {
+        for ch in ['\u{e0b0}', '\u{e0b2}', '\u{e0b4}', '\u{e0b6}'] {
+            let (w, h) = (12u32, 24u32);
+            let m = sep_mask(ch, w, h, 2.0).unwrap();
+            let at = |x: u32, y: u32| m[(y * w + x) as usize];
+            for x in 0..w {
+                assert!(
+                    (0..h).any(|y| at(x, y) > 0),
+                    "{ch:?} 第 {x} 列全空 —— 会和相邻色块之间留一条竖缝"
+                );
+            }
+            assert!((0..w).any(|x| at(x, 0) > 0), "{ch:?} 顶边没有墨");
+            assert!((0..w).any(|x| at(x, h - 1) > 0), "{ch:?} 底边没有墨");
+        }
+        // 半圆的平边贴左:E0B4 整列实心
+        let m = sep_mask('\u{e0b4}', 12, 24, 2.0).unwrap();
+        assert!(
+            (0..24).all(|y| m[(y * 12) as usize] == 255),
+            "E0B4 的平边没有整列铺满"
+        );
+        // 右箭头的左沿同样是竖直实边
+        let m = sep_mask('\u{e0b0}', 12, 24, 2.0).unwrap();
+        assert!(
+            (1..23).all(|y| m[(y * 12) as usize] > 230),
+            "E0B0 的左沿不是实边"
+        );
+    }
+
+    /// 回归:相邻两个色块之间的分隔符不能在交界处留下背景色的竖列。
+    ///
+    /// 特意给一个带小数的内边距:格子起点落到半像素上时,底色矩形是按
+    /// `floor(x) .. ceil(x+w)` 铺的,而分隔符如果按 `round()` 落位就会整体
+    /// 右移 1 像素,左边让出一列背景色。
+    #[test]
+    fn separator_does_not_leave_background_seam() {
+        let mut cfg = AppConfig::default();
+        cfg.padding = 1.7;
+        // 第 1 格蓝底白字,第 2 格是粉底、蓝色前景的半圆(和 Oh My Posh 的
+        // `diamond` 风格同一个形态)
+        let t = term_with(
+            "\x1b[48;2;10;20;200m\x1b[38;2;255;255;255ma\x1b[48;2;200;20;30m\
+             \x1b[38;2;10;20;200m\u{e0b4}\x1b[0m",
+            2,
+            12,
+        );
+        let (snap, cursor, palette) = snapshot(&t, 12, 0.0);
+        let mut r = Renderer::new(&cfg, 1.0).unwrap();
+        let (w, h) = (
+            (12.0 * r.cell_w + 2.0 * r.pad_x) as u32,
+            (2.0 * r.cell_h + 2.0 * r.pad_y) as u32,
+        );
+        let mut buf = vec![0u32; (w * h) as usize];
+        let hidden = CursorInfo {
+            visible: false,
+            ..cursor
+        };
+        r.paint(&mut buf, w, h, &snap, &hidden, &palette, None, palette.cursor_bg, true);
+        // 半圆那一格(第 2 列)的中腰:左边沿必须是分隔符的前景色(蓝),
+        // 不能是背景色(粉)
+        let x = (r.pad_x + r.cell_w).floor() as u32;
+        let y = (r.pad_y + r.cell_h * 0.5) as u32;
+        let px = buf[(y * w + x) as usize];
+        let (r_, g_, b_) = ((px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
+        assert!(
+            b_ > 150 && r_ < 80,
+            "分隔符左沿漏出了背景色:({r_},{g_},{b_})"
         );
     }
 
@@ -4511,7 +5012,7 @@ mod dump {
     }
 
     fn omp_frame(path: &str, cfg: &AppConfig) {
-        let (rows, cols) = (4usize, 64usize);
+        let (rows, cols) = (5usize, 64usize);
         let size = TerminalSize {
             rows,
             cols,
@@ -4542,6 +5043,31 @@ mod dump {
         s.push_str(&seg(b, bg0, "\u{e725} main", c, arrow));
         s.push_str(&seg(c, bg0, "\u{e718} v20.11", a, arrow));
         s.push_str("\x1b[48;2;30;30;46m\x1b[38;2;137;180;250m\u{e0b0}\x1b[0m\r\n");
+        // Catppuccin 主题的 `diamond` 风格(用户实际在用的那一套):
+        // 行首 \ue0b6(实心右半圆,平边贴右)、段间 \ue0b4(实心左半圆,平边贴左)。
+        // 这两个"半圆"是把字体位图铺满格子时最容易翻车的形状 —— 位图里的半圆
+        // 是按 em 框画的,压进格子后既不是圆、平边也顶不到格线,于是每段之间
+        // 都留着一条背景色的竖缝。用几何画就没有这个问题。
+        {
+            let blue = "138;173;244";
+            let pink = "245;189;230";
+            let lav = "183;189;248";
+            let text = "73;77;100";
+            // 行首菱形:前景 = 本段底色,背景 = 终端默认色
+            s.push_str(&format!(
+                "\x1b[49m\x1b[38;2;{blue}m\u{e0b6}\x1b[48;2;{blue}m\x1b[38;2;{text}m DYBAG @ ELAINA "
+            ));
+            // 段间:前景 = 前一段底色,背景 = 后一段底色
+            s.push_str(&format!(
+                "\x1b[48;2;{pink}m\x1b[38;2;{blue}m\u{e0b4}\x1b[38;2;{text}m \u{e5fe} ~/dev "
+            ));
+            s.push_str(&format!(
+                "\x1b[48;2;{lav}m\x1b[38;2;{pink}m\u{e0b4}\x1b[38;2;{text}m \u{e725} main "
+            ));
+            s.push_str(&format!(
+                "\x1b[49m\x1b[38;2;{lav}m\u{e0b4}\x1b[0m\r\n"
+            ));
+        }
         // 细箭头 \u{e0b1} + 常用 OMP 图标,并排看对齐与宽度
         s.push_str(&seg(
             a,
@@ -5103,6 +5629,69 @@ mod dump {
                 "x0={x0} 时正好放得下整段,图标 + 三个汉字都要画出来"
             );
         }
+    }
+
+    /// OMP 的 OS 图标(U+E62A)在正文里必须和文字一样大、一样居中。
+    ///
+    /// 回归:以前图标被 `min(cell_w/ink_w, ...)` 挤进一格,只有文字的六成高,
+    /// 还按字形顶边摆位,所以"又小又歪"。wezterm 是按字体原尺寸画、允许溢出
+    /// 格子的,这里对齐它的做法。
+    #[test]
+    fn prompt_icon_keeps_natural_size_and_text_center() {
+        let cfg = AppConfig::default();
+        let mut r = Renderer::new(&cfg, 1.0).expect("加载字体");
+        // 真机里会话先输出过别的 PUA 字符,图标字体已经被扫描加载,
+        // U+E62A 会从 Meslo 而不是内置的符号字体取字形 —— 这里复现那条路径。
+        r.ensure_icons();
+        let style = StyleBits::default();
+        let (band_c, band_h) = r.text_band(style, 1.0);
+        assert!(band_h > 1.0);
+
+        let mut frame = Frame::default();
+        r.draw_text(
+            &mut frame,
+            "\u{e62a}0",
+            0.0,
+            100.0,
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            style,
+            1,
+        );
+        let glyphs: Vec<_> = frame
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::frame::Item::Glyph { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(glyphs.len(), 2, "图标 + 数字 '0'");
+        let icon = glyphs[0];
+        let digit = glyphs[1];
+        let icon_h = icon[3] as f64;
+        let digit_h = digit[3] as f64;
+        assert!(
+            (icon_h - digit_h).abs() <= 2.0,
+            "图标应和文字差不多高:{icon_h:.1} vs {digit_h:.1}"
+        );
+        assert!(
+            icon_h <= band_h * ICON_RATIO + 2.0,
+            "画满 em 框的图标要缩到文字高度:{icon_h:.1} vs {band_h:.1}"
+        );
+        let icon_center = icon[1] as f64 + icon_h / 2.0;
+        let digit_center = digit[1] as f64 + digit_h / 2.0;
+        assert!(
+            (icon_center - digit_center).abs() <= 1.5,
+            "图标中线没对齐文字:{icon_center:.1} vs {digit_center:.1}"
+        );
+        assert!(
+            (icon_center - (100.0 + band_c)).abs() <= 1.5,
+            "图标中线应落在 baseline + band_c"
+        );
     }
 
     /// 状态栏图标要按"文字高度"摆:画满 em 框的图标(比如 MDI 的电池)收到

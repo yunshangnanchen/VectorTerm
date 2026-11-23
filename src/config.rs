@@ -1161,6 +1161,13 @@ pub struct WindowDecorations {
     /// 非客户区压成 0,DWM 默认画方角;默认通过 `DWMWCP_ROUND` 要回圆角。
     /// 这是 VectorTerm 自己的开关(wezterm 没有同名项),`false` = 强制方角。
     pub rounded_corners: bool,
+    /// 开/关窗动画(`window_animation`,默认 true)。
+    ///
+    /// 窗口第一次可见时淡入 + 从 96% 涨到 100%,关窗时反过来再退出。
+    /// 尊重系统的"动画效果"开关(辅助功能里关掉后直接显示,不播)。
+    pub animation: bool,
+    /// 动画时长(毫秒,`window_animation_ms`)。关窗用它的 0.75 倍。
+    pub animation_ms: f32,
 }
 
 impl Default for WindowDecorations {
@@ -1177,6 +1184,8 @@ impl Default for WindowDecorations {
             color: None,
             style: ButtonStyle::Windows,
             rounded_corners: true,
+            animation: true,
+            animation_ms: 160.0,
         }
     }
 }
@@ -1977,6 +1986,16 @@ fn parse_table(tbl: &mlua::Table) -> Result<AppConfig, String> {
     // VectorTerm 扩展:无边框窗口要不要 Win11 圆角(默认 true)
     if let Ok(Some(v)) = tbl.get::<Option<bool>>("window_rounded_corners") {
         cfg.window.rounded_corners = v;
+    }
+    // VectorTerm 扩展:开/关窗动画(淡入淡出 + 绕中心微缩放)。
+    //
+    // 默认开:160ms 的进出场比"啪一下出现"舒服,而且不会拖慢启动 ——
+    // 动画在窗口第一次可见之后才开始跑,首帧早就画好了。
+    if let Ok(Some(v)) = tbl.get::<Option<bool>>("window_animation") {
+        cfg.window.animation = v;
+    }
+    if let Ok(Some(v)) = tbl.get::<Option<f64>>("window_animation_ms") {
+        cfg.window.animation_ms = v.clamp(0.0, 600.0) as f32;
     }
     parse_integrated_buttons(&tbl, &mut cfg.window);
     parse_background(&tbl, &mut cfg.background);
@@ -4088,6 +4107,24 @@ mod tests {
 
         let cfg = parse_str("return { window_rounded_corners = true }");
         assert!(cfg.window.rounded_corners);
+    }
+
+    /// 开 / 关窗动画默认开,时长夹在 0..600ms
+    #[test]
+    fn window_animation_is_configurable() {
+        let d = AppConfig::default();
+        assert!(d.window.animation, "默认应该有开/关窗动画");
+        assert!((d.window.animation_ms - 160.0).abs() < 0.001);
+
+        assert!(!parse_str("return { window_animation = false }").window.animation);
+
+        let cfg = parse_str("return { window_animation_ms = 90 }");
+        assert!((cfg.window.animation_ms - 90.0).abs() < 0.001);
+
+        // 上界 600:再慢就不像"窗口动画"了,像卡住
+        assert!((parse_str("return { window_animation_ms = 5000 }").window.animation_ms - 600.0).abs() < 0.001);
+        // 下界 0:归零等价于关掉(窗口直接出现,不闪一下)
+        assert_eq!(parse_str("return { window_animation_ms = -20 }").window.animation_ms, 0.0);
     }
 
     /// 拖动时默认与 wezterm 一致:实时调整文字位置;另两种是可选退路

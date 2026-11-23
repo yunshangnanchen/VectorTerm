@@ -1055,8 +1055,18 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         };
         if state.quit_requested {
-            el.exit();
-            return;
+            // 关窗动画还在播:先让它收尾(见 `tick_window_anim`),否则最后
+            // 一百多毫秒的淡出根本来不及上屏。超时兜底防止任何一路卡死时
+            // 窗口关不掉。
+            let closing = state
+                .win_anim
+                .as_ref()
+                .map(|a| a.closing && !a.done(Instant::now()))
+                .unwrap_or(false);
+            if !closing {
+                el.exit();
+                return;
+            }
         }
         // 诊断:`VECTORTERM_IME_OPEN=1` 时反复把输入法保持在打开状态(现实里没人
         // 会为了跑探针去点任务栏的语言栏)。没设这个变量时这里是一次
@@ -1463,6 +1473,8 @@ impl ApplicationHandler<UserEvent> for App {
                 || state.overlay_trail_on
                 // 失焦白边的淡入/淡出同样是连续帧
                 || state.focus_ring.needs_frames()
+                // 开 / 关窗动画:窗口本体在淡,不连续画就是一顿一顿的
+                || state.win_anim.is_some()
         } || ck_anim;
         if any_anim {
             wake = earlier(wake, Instant::now() + Duration::from_millis(8));
@@ -4034,8 +4046,90 @@ impl FocusRing {
     }
 }
 
-/// 浮层动画的坐标变换:绕自身中心等比缩放,再整体竖直位移。
+/// 开 / 关窗的进动画。
 ///
+/// 和 `FocusRing` 一样只存"起点时刻 + 时长",每帧按已过时间重算 —— 中间掉帧
+/// 只是这一帧跨度大一点,不会积攒误差。
+///
+/// 两个通道:
+/// * **透明**:逐像素 alpha(合成交换链)走 GPU 着色器的 `fade`,DWM 按预乘
+///   alpha 合成,整块窗口(含毛玻璃)真的淡下去;其他后端走窗口的 `LWA_ALPHA`,
+///   整块窗口一起淡。
+/// * **缩放**:只有 GPU 后端有 —— 顶点着色器把坐标绕窗口中心缩一下。**不能**
+///   靠改窗口尺寸来"放大"终端:一改尺寸就要重算行列,提示符会重新折行,
+///   看起来是"终端被挤窄"而不是"窗口涨开"。
+struct WindowAnim {
+    start: Instant,
+    /// 时长(毫秒)。关窗用开窗的 3/4,退场比进场急一点更利落。
+    ms: f64,
+    /// true = 关窗动画,放完就退出。
+    closing: bool,
+    /// 起始不透明度。开窗是 0,关窗通常是 1;开窗放到一半就要关时,
+    /// 从当前值接着往下走,不会先跳回全不透明再淡出。
+    from: f32,
+    /// 还没开始计时。开窗动画在 `GuiState::new` 里排上,但那一刻 shell 还在
+    /// spawn、pty 还没 attach,真正第一帧可能是一两百毫秒之后 —— 若从构造
+    /// 那一刻计时,动画早就跑完了,用户看到的是一下子蹦出来的窗口。所以把
+    /// 起点推迟到第一次 `tick_window_anim`(即第一帧正在画的时候)。
+    pending: bool,
+}
+
+impl WindowAnim {
+    /// 进度 0..1(线性)。
+    fn progress(&self, now: Instant) -> f64 {
+        if self.ms <= 1.0 {
+            return 1.0;
+        }
+        (now.duration_since(self.start).as_secs_f64() * 1000.0 / self.ms).clamp(0.0, 1.0)
+    }
+
+    /// 这一帧的不透明度 + 缩放倍数。
+    ///
+    /// 进场用 ease-out(开头快、收尾稳),退场用 ease-in(先慢后快)——
+    /// 和 Windows 自己的窗口动画节奏一致。
+    fn values(&self, now: Instant) -> (f32, f32) {
+        let k = self.progress(now);
+        let e = if self.closing {
+            k * k
+        } else {
+            1.0 - (1.0 - k).powi(3)
+        };
+        let target = if self.closing { 0.0 } else { 1.0 };
+        let v = self.from + (target - self.from) * e as f32;
+        // 96.5% → 100%:幅度小一点,才像"涨出来"而不是"弹一下"
+        (v, 0.965 + 0.035 * v)
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        self.progress(now) >= 1.0
+    }
+}
+
+/// 系统"动画效果"开关(辅助功能 → 视觉效果)。关掉之后所有窗口动画都该停,
+/// 这是用户的明确意图,不能因为"我们的动画更好看"就当没看见。
+#[cfg(windows)]
+fn system_animations_on() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
+    };
+    let mut on: i32 = 1;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut on as *mut i32 as *mut std::ffi::c_void,
+            0,
+        )
+    };
+    ok != 0 && on != 0
+}
+
+#[cfg(not(windows))]
+fn system_animations_on() -> bool {
+    false
+}
+
+/// 浮层动画的坐标变换:绕自身中心等比缩放,再整体竖直位移。
 /// 单拎出来是因为面板里每个矩形、每行文字都要过同一个变换 —— 各算各的话,
 /// 框放大了字没放大(或者反过来)立刻露馅。
 #[derive(Clone, Copy)]
@@ -4234,6 +4328,12 @@ struct GuiState {
     overlay_trail: cursor::CursorTrail,
     /// 失焦白边的淡入/淡出进度(见 `FocusRing`)
     focus_ring: FocusRing,
+    /// 开 / 关窗动画(见 `WindowAnim`)。None = 没在播。
+    win_anim: Option<WindowAnim>,
+    /// 不开窗动画时(没配置 / 系统关了动画)对应的"整窗 alpha 基值":
+    /// 配了 `window_background_opacity` 又没有逐像素 alpha 时是那个不透明度,
+    /// 否则是 1.0。动画每一帧都按 `基值 × 进度` 下发,放完再还原成它。
+    win_alpha_base: f32,
     /// 飞行动画是否已装填:只在浮层刚打开的那一段播,收敛后关掉
     overlay_trail_on: bool,
     /// 搜索结果重算的最早时刻:终端还在吐字时节流,别每帧扫一遍全量历史
@@ -4385,7 +4485,7 @@ impl GuiState {
         let bar_h = tab_bar_total_height(&metrics, inner.height as f64, top_inset, show_bar);
         renderer.content_top = if cfg.tab_bar.at_bottom { 0.0 } else { bar_h };
         renderer.content_bottom = if cfg.tab_bar.at_bottom { bar_h } else { 0.0 };
-        let (cols, rows) = renderer.compute_grid(inner.width, inner.height);
+        let (cols, rows) = renderer.reflow_padding(inner.width, inner.height);
         if profiling {
             crate::wlog!(
                 "[VectorTerm][profile] window={}x{} grid={cols}x{rows} scale={scale}",
@@ -4513,6 +4613,17 @@ impl GuiState {
         let cfg_mtime = cfg_path.as_deref().and_then(mtime_of);
         window.set_title(&window_title(tab.title()));
 
+        // 动画结束后要还原的"整窗 alpha 基值":只有"要半透明、但没有逐像素
+        // alpha"这一种情况才不是 1.0(和 `apply_window_glass` 的分支一一对应)。
+        let win_alpha_base = {
+            let per_pixel = matches!(&backend, Backend::Gpu(g, _) if g.is_transparent_surface());
+            let wants_glass = cfg.background.backdrop != config::Backdrop::None;
+            if !per_pixel && !wants_glass && cfg.background.needs_transparent_window() {
+                cfg.background.effective_opacity()
+            } else {
+                1.0
+            }
+        };
         let mut state = Self {
             window,
             proxy,
@@ -4658,6 +4769,26 @@ impl GuiState {
                 cfg.focus_border.fade_in_ms,
                 cfg.focus_border.fade_out_ms,
             ),
+            // 开窗动画:窗口已经可见(非玻璃路径)或刚 `set_visible(true)`,
+            // 第一帧按 0 的不透明度画,随后 160ms 淡进来。首帧本来就是
+            // "刚画好还没上屏"的那一刻,所以这段不会拖慢启动。
+            win_anim: {
+                let on = cfg.window.animation
+                    && cfg.window.animation_ms >= 1.0
+                    && system_animations_on();
+                if on {
+                    Some(WindowAnim {
+                        start: Instant::now(),
+                        ms: cfg.window.animation_ms as f64,
+                        closing: false,
+                        from: 0.0,
+                        pending: true,
+                    })
+                } else {
+                    None
+                }
+            },
+            win_alpha_base,
             next_search_refresh: Instant::now(),
             scrollbar_drag: None,
             split_drag: None,
@@ -4772,7 +4903,9 @@ impl GuiState {
         } else {
             0.0
         };
-        self.renderer.compute_grid(w, h)
+        // 行数定下来之后分配剩余垂直空间(底边固定、余下给顶部)并写回 pad_y。
+        // 不能放在 compute_grid 里:那里还有一堆 &self 的鼠标命中路径要调。
+        self.renderer.reflow_padding(w, h)
     }
 
     /// 真正把行列数同步给所有标签的 PTY 与 wezterm-term。
@@ -4790,6 +4923,24 @@ impl GuiState {
             resize_tab_layout(&self.renderer, t, grid, &self.cfg.split_divider);
         }
         crate::wlog!("[VectorTerm] 网格同步: 整窗 {}x{} ({}x{})", grid.0, grid.1, w, h);
+        if std::env::var_os("VECTORTERM_GRID_TRACE").is_some() {
+            let r = &self.renderer;
+            eprintln!(
+                "[grid] {}x{} win={}x{} pad={:.1}/{:.1} cell={:.2}x{:.2} top={:.1} bot={:.1} \
+                 剩余底边={:.2}px",
+                grid.0,
+                grid.1,
+                w,
+                h,
+                r.pad_x,
+                r.pad_y,
+                r.cell_w,
+                r.cell_h,
+                r.content_top,
+                r.content_bottom,
+                h as f64 - r.pad_y - r.content_top - grid.1 as f64 * r.cell_h
+            );
+        }
         self.window.request_redraw();
     }
 
@@ -5465,14 +5616,129 @@ impl GuiState {
     }
 
     /// 关窗口的统一入口:该问就问,不问就真关。标题栏 ✕、`Alt+F4`、
-    /// 关最后一个标签都走这里 —— 少一条路就少一次"怎么没提示"。
-    /// 返回 `true` = 真的开始退了。
+    /// 关最后一个标签、`WM_CLOSE` 都走这里 —— 少一条路就少一次"怎么没提示"。
+    ///
+    /// 返回 `true` = 现在就可以退出。开/关窗动画没播完时先返回 `false`,
+    /// 由 `about_to_wait` 在动画结束那一刻再退 —— 关窗动画只有一百多毫秒,
+    /// 值得等它放完,不然"淡出"根本看不到。
     fn close_window_or_ask(&mut self) -> bool {
         if self.ask_quit() {
             return false;
         }
+        let closing = self.begin_close_anim();
         self.request_quit();
+        // 正在播关窗动画:退出延后,让 `tick_window_anim` 收尾
+        !closing
+    }
+
+    /// 启动关窗动画。返回 true = 已经接上(调用方不要立刻退出)。
+    fn begin_close_anim(&mut self) -> bool {
+        if !self.cfg.window.animation || self.cfg.window.animation_ms < 1.0 {
+            return false;
+        }
+        if self.win_anim.as_ref().is_some_and(|a| a.closing) {
+            return false;
+        }
+        if !system_animations_on() {
+            return false;
+        }
+        // 开窗还没放完就要关:从当前透明度接着往下走,不跳回全不透明
+        let now = Instant::now();
+        let from = self
+            .win_anim
+            .as_ref()
+            .map(|a| a.values(now).0)
+            .unwrap_or(1.0);
+        self.win_anim = Some(WindowAnim {
+            start: now,
+            ms: (self.cfg.window.animation_ms as f64 * 0.75).max(1.0),
+            closing: true,
+            from,
+            pending: false,
+        });
+        self.window.request_redraw();
         true
+    }
+
+    /// 把窗口动画推进到 `now`,返回"还在播"。
+    ///
+    /// 每帧都要调(在 `redraw` 里),因为透明度和缩放是要写进这一帧的绘制
+    /// 参数里的 —— CPU 后端的透明度是窗口属性(GDI 位图整块淡),只有
+    /// GPU 的逐像素路线才真的进着色器。
+    fn tick_window_anim(&mut self, now: Instant) -> bool {
+        // 开窗动画的第一帧才起跑(见 `WindowAnim::pending`):构造到首帧之间
+        // 要 spawn shell、attach pty,这段时间不该算进淡入的进度里。
+        if let Some(a) = self.win_anim.as_mut() {
+            if a.pending {
+                a.start = now;
+                a.pending = false;
+            }
+        }
+        let Some(anim) = self.win_anim.as_ref() else {
+            return false;
+        };
+        let done = anim.done(now);
+        let closing = anim.closing;
+        let (v, zoom) = anim.values(now);
+        let per_pixel = matches!(&self.backend, Backend::Gpu(g, _) if g.is_transparent_surface());
+
+        if std::env::var_os("VECTORTERM_ANIM_TRACE").is_some() {
+            // 诊断:开/关窗动画每帧的取值。动画是"看不见摸不着"的 —— 出问题
+            // 时要么是没跑(窗口一下蹦出来),要么是跑偏(停在半透明)。打出来
+            // 就能直接看出是时间轴错了还是两段动画接错了。
+            eprintln!(
+                "[anim] t={:6.1}ms v={:.3} zoom={:.4} per_pixel={} closing={} base={:.2}",
+                now.duration_since(anim.start).as_secs_f64() * 1000.0,
+                v,
+                zoom,
+                per_pixel,
+                closing,
+                self.win_alpha_base
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            if let Backend::Gpu(g, _) = &mut self.backend {
+                // 逐像素 alpha 用着色器淡;不透明交换链上 alpha 会被丢掉,
+                // 那条路交给下面的窗口级 alpha。
+                g.set_anim(if per_pixel { v } else { 1.0 }, zoom);
+            }
+            if !per_pixel {
+                if let Some(h) = hwnd_of(&self.window) {
+                    if done && !closing {
+                        // 放完还原:用户配的整窗不透明度留着,没配就摘掉分层位
+                        if self.win_alpha_base >= 0.999 {
+                            clear_uniform_alpha(h);
+                        } else {
+                            set_uniform_alpha(h, (self.win_alpha_base * 255.0).round() as u8);
+                        }
+                    } else {
+                        let a = (self.win_alpha_base * v).clamp(0.0, 1.0);
+                        // 别真给 0:分层窗口 alpha 归零时连鼠标都收不到,万一
+                        // 哪一路重绘卡住就会留下一个"看不见也点不到"的窗口。
+                        // 1/255 在屏幕上和全透明没区别。
+                        let a8 = (a * 255.0).round().clamp(1.0, 255.0) as u8;
+                        set_uniform_alpha(h, a8);
+                    }
+                }
+            }
+            // 收尾时把 GPU 的动画参数也复位,别让最后一帧停在半透明上
+            if done {
+                if let Backend::Gpu(g, _) = &mut self.backend {
+                    g.set_anim(1.0, 1.0);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (v, zoom, per_pixel, done);
+        }
+
+        if done {
+            self.win_anim = None;
+        }
+        !done
     }
 
     /// 确认框里"取消"
@@ -9109,6 +9375,9 @@ impl GuiState {
         self.focus_ring.tick(now);
         // 文件面板:退场放完之后才算真正收摊 —— 面板数据、所属 pane 一起清
         self.browser_anim.tick(now);
+        // 开 / 关窗动画:不透明度与缩放要在这一帧的绘制参数里生效,所以
+        // 必须在构建显示列表之前推进(见 `tick_window_anim`)。
+        self.tick_window_anim(now);
         if !self.browser_anim.visible() && self.browser_exit.is_some() {
             self.browser_exit = None;
             self.tab.browser_pane = 0;

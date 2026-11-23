@@ -59,7 +59,20 @@ struct Globals {
     size: [f32; 2],
     /// 整窗不透明度:只给背景类填充的片元用(`fs_main_bg`)
     bg_alpha: f32,
-    _pad: f32,
+    /// 开/关窗动画的整体透明度(0..1,平时 1.0)。
+    ///
+    /// 只对**逐像素 alpha** 的合成交换链有意义:DWM 按预乘 alpha 合成,
+    /// 把颜色和 alpha 一起乘下去就是"整块窗口淡入/淡出"。不透明交换链上
+    /// alpha 会被忽略,那条路改用窗口的 `LWA_ALPHA`(见 `main.rs` 的
+    /// `WindowAnim`),所以这里恒为 1。
+    fade: f32,
+    /// 开/关窗动画的整体缩放(1.0 = 不缩放),绕窗口中心缩。
+    ///
+    /// 跟"改窗口尺寸"不是一回事:窗口尺寸一变,终端就要重算行列、内容会
+    /// 重新折行;这里只在顶点着色器里把坐标朝着中心缩一下,内容一个字符
+    /// 都不会动,视觉上却是"从中间涨出来"。
+    zoom: f32,
+    _pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -242,6 +255,10 @@ pub struct GpuRenderer {
     dcomp: Option<DcompTarget>,
     /// 清屏用的 alpha(背景层不透明度)。1.0 = 不透明。
     bg_alpha: f32,
+    /// 开/关窗动画的整体透明度(1.0 = 正常)。
+    fade: f32,
+    /// 开/关窗动画的整体缩放(1.0 = 不缩放)。
+    zoom: f32,
 }
 
 /// 交换链的 alpha 模式。
@@ -337,7 +354,11 @@ const SHADER: &str = r#"
 struct Globals {
     size: vec2<f32>,
     bg_alpha: f32,
-    _pad: f32,
+    fade: f32,
+    zoom: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -373,6 +394,13 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Inst) -> VsOut {
     var p = inst.rect.xy + c * inst.rect.zw;
     // 斜体剪切:顶上偏得多,底下几乎不偏
     p.x = p.x + inst.params.x * (1.0 - c.y);
+    // 开/关窗动画:所有内容绕窗口中心等比缩放。只动顶点坐标,字形/矩形
+    // 的布局与采样都不变(缩放期间纹理被线性放大一点点,持续一百多毫秒,
+    // 看起来正是"窗口涨开"该有的样子)。
+    if (globals.zoom != 1.0) {
+        let center = globals.size * 0.5;
+        p = (p - center) * globals.zoom + center;
+    }
     var o: VsOut;
     o.pos = vec4<f32>(
         p.x / globals.size.x * 2.0 - 1.0,
@@ -434,8 +462,11 @@ fn fs_shade(in: VsOut) -> vec4<f32> {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let c = fs_shade(in);
-    // 预乘输出:混合状态是 One / OneMinusSrcAlpha
-    return vec4<f32>(c.rgb * c.a, c.a);
+    // 预乘输出:混合状态是 One / OneMinusSrcAlpha。
+    // `fade` 是开/关窗动画的整体透明度:颜色和 alpha 一起乘,预乘关系不变,
+    // DWM 那边看到的就是"整块内容淡下去"。
+    let f = globals.fade;
+    return vec4<f32>(c.rgb * c.a * f, c.a * f);
 }
 
 /// 背景类填充:清屏色、背景层(渐变/壁纸)、单元格底色、标签栏底色。
@@ -447,7 +478,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_main_bg(in: VsOut) -> @location(0) vec4<f32> {
     let c = fs_shade(in);
-    return vec4<f32>(c.rgb * c.a * globals.bg_alpha, c.a);
+    let f = globals.fade;
+    return vec4<f32>(c.rgb * c.a * globals.bg_alpha * f, c.a * f);
 }
 "#;
 
@@ -1156,6 +1188,8 @@ impl GpuRenderer {
             #[cfg(windows)]
             dcomp,
             bg_alpha: 1.0,
+            fade: 1.0,
+            zoom: 1.0,
         })
     }
 
@@ -1171,6 +1205,19 @@ impl GpuRenderer {
     /// 这正是层叠窗口统一 alpha 做不到的。
     pub fn set_background_alpha(&mut self, alpha: f32) {
         self.bg_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    /// 开/关窗动画的整体透明度与缩放(`1.0, 1.0` = 普通帧)。
+    ///
+    /// 透明度只有在逐像素 alpha(合成交换链)下才是"真的淡出":预乘输出
+    /// 乘下去,DWM 合成时整块窗口就淡了;不透明交换链上 alpha 被忽略,
+    /// 那种情况下由 `main.rs` 用窗口的 `LWA_ALPHA` 做淡出,这里保持 1.0。
+    ///
+    /// 缩放走顶点着色器(见 `vs_main`):内容绕窗口中心缩,行列数不变、
+    /// 文字不重新折行,所以看起来是"窗口涨开",而不是"终端被挤窄"。
+    pub fn set_anim(&mut self, fade: f32, zoom: f32) {
+        self.fade = fade.clamp(0.0, 1.0);
+        self.zoom = zoom.clamp(0.5, 1.5);
     }
 
     /// 当前是否真的走合成交换链(逐像素 alpha 可用)。
@@ -1697,7 +1744,9 @@ impl GpuRenderer {
                     self.config.height as f32,
                 ],
                 bg_alpha: self.bg_alpha,
-                _pad: 0.0,
+                fade: self.fade,
+                zoom: self.zoom,
+                _pad: [0.0; 3],
             }),
         );
         if let Some(Item::Trail {
@@ -1786,7 +1835,10 @@ impl GpuRenderer {
             let c = frame.clear;
             // 逐像素透明时清屏要写预乘色:颜色乘 alpha,alpha 单独给。
             // 不透明窗口下 bg_alpha 恒为 1,乘了也不变。
+            // `fade` 再乘一层:开窗动画的第一帧整块窗口(含清屏色)都是透明的,
+            // 不然会先看到一块实心底色再"长出"内容。
             let a = self.bg_alpha.clamp(0.0, 1.0) as f64;
+            let f = self.fade.clamp(0.0, 1.0) as f64;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("VectorTerm"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1794,10 +1846,10 @@ impl GpuRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: c.r as f64 / 255.0 * a,
-                            g: c.g as f64 / 255.0 * a,
-                            b: c.b as f64 / 255.0 * a,
-                            a,
+                            r: c.r as f64 / 255.0 * a * f,
+                            g: c.g as f64 / 255.0 * a * f,
+                            b: c.b as f64 / 255.0 * a * f,
+                            a: a * f,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
